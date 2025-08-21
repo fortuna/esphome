@@ -361,9 +361,6 @@ void Rtttl::finish_() {
     this->set_state_(State::STATE_STOPPING);
   }
 #endif
-  this->note_duration_ = 0;
-  this->on_finished_playback_callback_.call();
-  ESP_LOGD(TAG, "Playback finished");
 }
 
 #if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_DEBUG
@@ -387,12 +384,18 @@ static const LogString *state_to_string(State state) {
 
 void Rtttl::set_state_(State state) {
   State old_state = this->state_;
+  if (state == old_state) {
+    return;
+  }
   this->state_ = state;
   ESP_LOGV(TAG, "State changed from %s to %s", LOG_STR_ARG(state_to_string(old_state)),
            LOG_STR_ARG(state_to_string(state)));
 
   if (state == State::STATE_STOPPED) {
     this->disable_loop();
+    this->note_duration_ = 0;
+    this->on_finished_playback_callback_.call();
+    ESP_LOGD(TAG, "Playback finished");
   } else if (old_state == State::STATE_STOPPED) {
     // Clear loop_done when transitioning from STOPPED to any other state
     this->enable_loop();
