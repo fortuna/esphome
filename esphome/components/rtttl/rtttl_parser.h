@@ -7,7 +7,7 @@ namespace esphome {
 namespace rtttl {
 
 /**
- * @brief A struct to hold a single note from an RTTTL string.
+ * @brief A struct to hold a single note from an RTTTL string..
  */
 struct RtttlNote {
   uint16_t frequency;    ///< The frequency of the note in Hz. 0 for a pause.
