@@ -53,7 +53,7 @@ class Rtttl : public Component {
     this->on_finished_playback_callback_.add(std::move(callback));
   }
 
- protected:
+ private:
   /**
    * @brief Finalizes the playback of the RTTTL string.
    *
@@ -65,13 +65,11 @@ class Rtttl : public Component {
   void set_state_(State state);
 
   /// The parser for the RTTTL string.
-  std::unique_ptr<RTTTLParser> parser_;
+  std::unique_ptr<RtttlParser> parser_;
+  /// The current note being played.
+  optional<RtttlNote> current_note_;
   /// The time the last note was started.
-  uint32_t last_note_time_{0};
-  /// The duration of the current note in milliseconds.
-  uint16_t note_duration_{0};
-  /// The frequency of the current note in Hz.
-  uint32_t output_freq_{0};
+  uint32_t note_start_time_ms_{0};
   /// The gain of the output.
   float gain_{0.6f};
   /// The current state of the RTTTL player.

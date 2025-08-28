@@ -14,7 +14,7 @@ static const uint16_t NOTES[] = {
     1109, 1175, 1245, 1319, 1397, 1480, 1568, 1661, 1760, 1865, 1976, 2093, 2217,
     2349, 2489, 2637, 2794, 2960, 3136, 3322, 3520, 3729, 3951};
 
-RTTTLParser::RTTTLParser(std::string rtttl) : rtttl_(std::move(rtttl)) {
+RtttlParser::RtttlParser(std::string rtttl) : rtttl_(std::move(rtttl)) {
   this->default_duration_ = 4;
   this->default_octave_ = 6;
   int bpm = 63;
@@ -73,10 +73,10 @@ RTTTLParser::RTTTLParser(std::string rtttl) : rtttl_(std::move(rtttl)) {
   }
   this->position_++;
 
-  this->wholenote_ = (60 * 1000L / bpm) * 4;
+  this->wholenote_ms_ = (60 * 1000L / bpm) * 4;
 }
 
-optional<RTTTLNote> RTTTLParser::get_next_note() {
+optional<RtttlNote> RtttlParser::get_next_note() {
   if (this->position_ == std::string::npos || this->position_ >= this->rtttl_.length()) {
     return {};
   }
@@ -93,9 +93,9 @@ optional<RTTTLNote> RTTTLParser::get_next_note() {
   uint16_t duration;
   uint8_t num = this->get_integer_();
   if (num) {
-    duration = this->wholenote_ / num;
+    duration = this->wholenote_ms_ / num;
   } else {
-    duration = this->wholenote_ / this->default_duration_;
+    duration = this->wholenote_ms_ / this->default_duration_;
   }
 
   // Get note
@@ -163,10 +163,10 @@ optional<RTTTLNote> RTTTLParser::get_next_note() {
     frequency = NOTES[note_index];
   }
 
-  return RTTTLNote{frequency, duration};
+  return RtttlNote{frequency, duration};
 }
 
-uint8_t RTTTLParser::get_integer_() {
+uint8_t RtttlParser::get_integer_() {
   uint8_t ret = 0;
   while (this->position_ < this->rtttl_.length() && isdigit(this->rtttl_[this->position_])) {
     ret = (ret * 10) + (this->rtttl_[this->position_++] - '0');

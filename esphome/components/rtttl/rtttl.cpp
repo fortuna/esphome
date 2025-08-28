@@ -29,10 +29,8 @@ void Rtttl::play(std::string rtttl) {
   }
 
   this->parser_ = make_unique<RTTTLParser>(std::move(rtttl));
-  this->note_duration_ = 0;
-  this->output_freq_ = 0;
-  this->last_note_time_ = millis();
-  this->note_duration_ = 1;
+  this->current_note_ = RTTTLNote{0, 1};
+  this->note_start_time_ms_ = millis();
 
 #ifdef USE_SPEAKER
   if (this->speaker_ != nullptr) {
@@ -63,7 +61,7 @@ void Rtttl::stop() {
     this->set_state_(STATE_STOPPING);
   }
 #endif
-  this->note_duration_ = 0;
+  this->current_note_.reset();
   this->parser_.reset();
 }
 
@@ -87,7 +85,7 @@ void Rtttl::finish_() {
     this->set_state_(State::STATE_STOPPING);
   }
 #endif
-  this->note_duration_ = 0;
+  this->current_note_.reset();
   this->parser_.reset();
 }
 
@@ -151,7 +149,7 @@ void Rtttl::loop() {
   }
 #endif
 #ifdef USE_OUTPUT
-  if (this->output_ != nullptr && millis() - this->last_note_time_ < this->note_duration_)
+  if (this->output_ != nullptr && millis() - this->note_start_time_ms_ < this->current_note_->duration_ms)
     return;
 #endif
 
@@ -161,14 +159,13 @@ void Rtttl::loop() {
     return;
   }
 
-  this->note_duration_ = note->duration;
-  bool need_note_gap = note->frequency == this->output_freq_;
-  this->output_freq_ = note->frequency;
+  bool need_note_gap = this->current_note_.has_value() && note->frequency == this->current_note_->frequency;
+  this->current_note_ = note;
 
-  if (this->output_freq_ != 0) {
-    ESP_LOGVV(TAG, "playing note: %d for %dms", this->output_freq_, this->note_duration_);
+  if (this->current_note_->frequency != 0) {
+    ESP_LOGVV(TAG, "playing note: %d for %dms", this->current_note_->frequency, this->current_note_->duration_ms);
   } else {
-    ESP_LOGVV(TAG, "waiting: %dms", this->note_duration_);
+    ESP_LOGVV(TAG, "waiting: %dms", this->current_note_->duration_ms);
   }
 
 #ifdef USE_OUTPUT
@@ -176,10 +173,10 @@ void Rtttl::loop() {
     if (need_note_gap) {
       this->output_->set_level(0.0);
       delay(DOUBLE_NOTE_GAP_MS);
-      this->note_duration_ -= DOUBLE_NOTE_GAP_MS;
+      this->current_note_->duration_ms -= DOUBLE_NOTE_GAP_MS;
     }
-    if (this->output_freq_ != 0) {
-      this->output_->update_frequency(this->output_freq_);
+    if (this->current_note_->frequency != 0) {
+      this->output_->update_frequency(this->current_note_->frequency);
       this->output_->set_level(this->gain_);
     } else {
       this->output_->set_level(0.0);
@@ -191,13 +188,13 @@ void Rtttl::loop() {
     this->samples_sent_ = 0;
     this->samples_gap_ = 0;
     this->samples_per_wave_ = 0;
-    this->samples_count_ = (this->sample_rate_ * this->note_duration_) / 1600;  //(ms);
+    this->samples_count_ = (this->sample_rate_ * this->current_note_->duration_ms) / 1600;  //(ms);
     if (need_note_gap) {
       this->samples_gap_ = (this->sample_rate_ * DOUBLE_NOTE_GAP_MS) / 1600;  //(ms);
     }
-    if (this->output_freq_ != 0) {
+    if (this->current_note_->frequency != 0) {
       uint16_t samples_wish = this->samples_count_;
-      this->samples_per_wave_ = (this->sample_rate_ << 10) / this->output_freq_;
+      this->samples_per_wave_ = (this->sample_rate_ << 10) / this->current_note_->frequency;
       uint16_t division = ((this->samples_count_ << 10) / this->samples_per_wave_) + 1;
       this->samples_count_ = (division * this->samples_per_wave_);
       this->samples_count_ = this->samples_count_ >> 10;
@@ -207,7 +204,7 @@ void Rtttl::loop() {
   }
 #endif
 
-  this->last_note_time_ = millis();
+  this->note_start_time_ms_ = millis();
 }
 
 #if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_DEBUG
