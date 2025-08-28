@@ -8,11 +8,10 @@ static const char *const TAG = "rtttl_parser";
 
 // These values can also be found as constants in the Tone library (Tone.h)
 // Note frequencies for octaves 4-7
-static const uint16_t NOTES[] = {
-    0,    262,  277,  294,  311,  330,  349,  370,  392,  415,  440,  466,  494,
-    523,  554,  587,  622,  659,  698,  740,  784,  831,  880,  932,  988,  1047,
-    1109, 1175, 1245, 1319, 1397, 1480, 1568, 1661, 1760, 1865, 1976, 2093, 2217,
-    2349, 2489, 2637, 2794, 2960, 3136, 3322, 3520, 3729, 3951};
+static const uint16_t NOTES[] = {0,    262,  277,  294,  311,  330,  349,  370,  392,  415,  440,  466,  494,
+                                 523,  554,  587,  622,  659,  698,  740,  784,  831,  880,  932,  988,  1047,
+                                 1109, 1175, 1245, 1319, 1397, 1480, 1568, 1661, 1760, 1865, 1976, 2093, 2217,
+                                 2349, 2489, 2637, 2794, 2960, 3136, 3322, 3520, 3729, 3951};
 
 RtttlParser::RtttlParser(std::string rtttl) : rtttl_(std::move(rtttl)) {
   this->default_duration_ = 4;
