@@ -28,8 +28,8 @@ void Rtttl::play(std::string rtttl) {
     return;
   }
 
-  this->parser_ = make_unique<RTTTLParser>(std::move(rtttl));
-  this->current_note_ = RTTTLNote{0, 1};
+  this->parser_ = make_unique<RtttlParser>(std::move(rtttl));
+  this->current_note_ = RtttlNote{0, 1};
   this->note_start_time_ms_ = millis();
 
 #ifdef USE_SPEAKER
