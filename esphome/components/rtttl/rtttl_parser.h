@@ -28,6 +28,7 @@ class RTTTLParser {
    * @param rtttl The RTTTL string to parse.
    */
   explicit RTTTLParser(std::string rtttl);
+  const std::string &get_name() const { return this->name_; }
 
   /**
    * @brief Get the next note from the RTTTL string.
@@ -42,6 +43,7 @@ class RTTTLParser {
 
  protected:
   std::string rtttl_;
+  std::string name_;
   size_t position_{0};
   uint16_t wholenote_;
   uint8_t default_duration_;

@@ -10,11 +10,6 @@ static const char *const TAG = "rtttl";
 
 static const uint32_t DOUBLE_NOTE_GAP_MS = 10;
 
-static const uint16_t I2S_SPEED = 1000;
-
-#undef HALF_PI
-static const double HALF_PI = 1.5707963267948966192313216916398;
-
 inline double deg2rad(double degrees) {
   static const double PI_ON_180 = 4.0 * atan(1.0) / 180.0;
   return degrees * PI_ON_180;
@@ -29,7 +24,7 @@ void Rtttl::dump_config() {
 
 void Rtttl::play(std::string rtttl) {
   if (this->state_ != State::STATE_STOPPED && this->state_ != State::STATE_STOPPING) {
-    ESP_LOGW(TAG, "Already playing");
+    ESP_LOGW(TAG, "Already playing: %s", this->parser_->get_name().c_str());
     return;
   }
 
@@ -240,6 +235,7 @@ void Rtttl::set_state_(State state) {
   ESP_LOGV(TAG, "State changed from %s to %s", LOG_STR_ARG(state_to_string(old_state)),
            LOG_STR_ARG(state_to_string(state)));
 
+  // Clear loop_done when transitioning from STOPPED to any other state
   if (state == State::STATE_STOPPED) {
     this->disable_loop();
     this->on_finished_playback_callback_.call();

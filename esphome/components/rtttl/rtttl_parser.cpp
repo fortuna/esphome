@@ -6,6 +6,7 @@ namespace rtttl {
 
 static const char *const TAG = "rtttl_parser";
 
+// These values can also be found as constants in the Tone library (Tone.h)
 // Note frequencies for octaves 4-7
 static const uint16_t NOTES[] = {
     0,    262,  277,  294,  311,  330,  349,  370,  392,  415,  440,  466,  494,
@@ -26,6 +27,7 @@ RTTTLParser::RTTTLParser(std::string rtttl) : rtttl_(std::move(rtttl)) {
     this->position_ = std::string::npos;
     return;
   }
+  this->name_ = this->rtttl_.substr(0, this->position_);
 
   // Get default duration
   this->position_ = this->rtttl_.find("d=", this->position_);
