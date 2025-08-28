@@ -2,6 +2,7 @@
 
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
+#include "rtttl_parser.h"
 
 #ifdef USE_OUTPUT
 #include "esphome/components/output/float_output.h"
@@ -52,14 +53,7 @@ class Rtttl : public Component {
     this->on_finished_playback_callback_.add(std::move(callback));
   }
 
- protected:
-  inline uint8_t get_integer_() {
-    uint8_t ret = 0;
-    while (isdigit(this->rtttl_[this->position_])) {
-      ret = (ret * 10) + (this->rtttl_[this->position_++] - '0');
-    }
-    return ret;
-  }
+ private:
   /**
    * @brief Finalizes the playback of the RTTTL string.
    *
@@ -70,23 +64,12 @@ class Rtttl : public Component {
   void finish_();
   void set_state_(State state);
 
-  /// The RTTTL string to play.
-  std::string rtttl_{""};
-  /// The current position in the RTTTL string.
-  size_t position_{0};
-  /// The duration of a whole note in milliseconds.
-  uint16_t wholenote_;
-  /// The default duration of a note (e.g. 4 for a quarter note).
-  uint16_t default_duration_;
-  /// The default octave for a note.
-  uint16_t default_octave_;
+  /// The parser for the RTTTL string.
+  std::unique_ptr<RtttlParser> parser_;
+  /// The current note being played.
+  optional<RtttlNote> current_note_;
   /// The time the last note was started.
-  uint32_t last_note_;
-  /// The duration of the current note in milliseconds.
-  uint16_t note_duration_;
-
-  /// The frequency of the current note in Hz.
-  uint32_t output_freq_;
+  uint32_t note_start_time_ms_{0};
   /// The gain of the output.
   float gain_{0.6f};
   /// The current state of the RTTTL player.
@@ -110,7 +93,6 @@ class Rtttl : public Component {
   int samples_count_{0};
   /// The number of samples for the gap between notes.
   int samples_gap_{0};
-
 #endif
 
   /// The callback to call when playback is finished.
