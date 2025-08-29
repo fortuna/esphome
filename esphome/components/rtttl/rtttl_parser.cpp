@@ -1,5 +1,8 @@
-#include "rtttl_parser.h"
+#include <array>
+
 #include "esphome/core/log.h"
+
+#include "rtttl_parser.h"
 
 namespace esphome {
 namespace rtttl {
@@ -154,7 +157,7 @@ std::optional<RtttlNote> RtttlParser::get_next_note() {
   uint16_t frequency = 0;
   if (note) {
     auto note_index = (scale - 4) * 12 + note;
-    if (note_index >= sizeof(NOTES) / sizeof(NOTES[0])) {
+    if (note_index >= std::size(NOTES)) {
       ESP_LOGE(TAG, "Note out of range");
       this->position_ = std::string::npos;
       return {};

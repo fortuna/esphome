@@ -1,7 +1,9 @@
-#include "rtttl.h"
 #include <cmath>
+
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
+
+#include "rtttl.h"
 
 namespace esphome {
 namespace rtttl {
