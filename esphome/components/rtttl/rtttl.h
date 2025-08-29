@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 #include "rtttl_parser.h"
@@ -70,7 +71,7 @@ class Rtttl : public Component {
   /// The parser for the RTTTL string.
   std::unique_ptr<RtttlParser> parser_;
   /// The current note being played.
-  optional<RtttlNote> current_note_;
+  std::optional<RtttlNote> current_note_;
   /// The time the last note was started.
   uint32_t note_start_time_ms_{0};
   /// The gain of the output.

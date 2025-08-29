@@ -1,8 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
-#include "esphome/core/optional.h"
 
 namespace esphome {
 namespace rtttl {
@@ -40,7 +40,7 @@ class RtttlParser {
    *
    * @return optional<RtttlNote> The next note, or an empty optional if parsing is finished.
    */
-  optional<RtttlNote> get_next_note();
+  std::optional<RtttlNote> get_next_note();
 
  private:
   /// Reads an integer from the current position in the RTTTL string and advances the position.

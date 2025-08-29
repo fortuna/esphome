@@ -75,7 +75,7 @@ RtttlParser::RtttlParser(std::string rtttl) : rtttl_(std::move(rtttl)) {
   this->wholenote_ms_ = (60 * 1000L / bpm) * 4;
 }
 
-optional<RtttlNote> RtttlParser::get_next_note() {
+std::optional<RtttlNote> RtttlParser::get_next_note() {
   if (this->position_ == std::string::npos || this->position_ >= this->rtttl_.length()) {
     return {};
   }
