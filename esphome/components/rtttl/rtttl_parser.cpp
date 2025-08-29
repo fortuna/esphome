@@ -36,7 +36,7 @@ RtttlParser::RtttlParser(std::string rtttl) : rtttl_(std::move(rtttl)) {
     return;
   }
   this->position_ += 2;
-  num = this->get_integer_();
+  num = this->read_integer_();
   if (num > 0)
     this->default_duration_ = num;
 
@@ -48,7 +48,7 @@ RtttlParser::RtttlParser(std::string rtttl) : rtttl_(std::move(rtttl)) {
     return;
   }
   this->position_ += 2;
-  num = get_integer_();
+  num = read_integer_();
   if (num >= 4 && num <= 7)
     this->default_octave_ = num;
 
@@ -60,7 +60,7 @@ RtttlParser::RtttlParser(std::string rtttl) : rtttl_(std::move(rtttl)) {
     return;
   }
   this->position_ += 2;
-  num = get_integer_();
+  num = read_integer_();
   if (num != 0)
     bpm = num;
 
@@ -90,7 +90,7 @@ optional<RtttlNote> RtttlParser::get_next_note() {
 
   // Get note duration
   uint16_t duration;
-  uint8_t num = this->get_integer_();
+  uint8_t num = this->read_integer_();
   if (num) {
     duration = this->wholenote_ms_ / num;
   } else {
@@ -141,7 +141,7 @@ optional<RtttlNote> RtttlParser::get_next_note() {
   }
 
   // Octave
-  uint8_t scale = this->get_integer_();
+  uint8_t scale = this->read_integer_();
   if (scale == 0)
     scale = this->default_octave_;
 
@@ -165,7 +165,7 @@ optional<RtttlNote> RtttlParser::get_next_note() {
   return RtttlNote{frequency, duration};
 }
 
-uint8_t RtttlParser::get_integer_() {
+uint8_t RtttlParser::read_integer_() {
   uint8_t ret = 0;
   while (this->position_ < this->rtttl_.length() && isdigit(this->rtttl_[this->position_])) {
     ret = (ret * 10) + (this->rtttl_[this->position_++] - '0');

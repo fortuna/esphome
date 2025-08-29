@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include "esphome/core/optional.h"
 
@@ -42,6 +43,10 @@ class RtttlParser {
   optional<RtttlNote> get_next_note();
 
  private:
+  /// Reads an integer from the current position in the RTTTL string and advances the position.
+  /// to after the integer. Returns 0 if no integer is found.
+  uint8_t read_integer_();
+
   /// The RTTTL string to parse.
   std::string rtttl_;
   /// The name of the song.
@@ -54,8 +59,6 @@ class RtttlParser {
   uint8_t default_duration_;
   /// The default octave for a note.
   uint8_t default_octave_;
-
-  uint8_t get_integer_();
 };
 
 }  // namespace rtttl
