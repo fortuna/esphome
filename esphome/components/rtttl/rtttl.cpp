@@ -151,7 +151,8 @@ void Rtttl::loop() {
   }
 #endif
 #ifdef USE_OUTPUT
-  if (this->output_ != nullptr && millis() - this->note_start_time_ms_ < this->current_note_->duration_ms)
+  if (this->output_ != nullptr && this->current_note_.has_value() &&
+      millis() - this->note_start_time_ms_ < this->current_note_->duration_ms)
     return;
 #endif
 
