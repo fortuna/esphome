@@ -48,7 +48,7 @@ enum SX126xBw : uint8_t {
   SX126X_BW_500000,
 };
 
-enum class SX126xError { NONE = 0, TIMEOUT, INVALID_PARAMS, SX126X_ERROR_NOT_READY };
+enum class SX126xError { NONE = 0, TIMEOUT, INVALID_PARAMS, SX126X_ERROR_NOT_READY, SX126X_ERROR_BUSY_TIMEOUT };
 
 class SX126xListener {
  public:
@@ -79,10 +79,10 @@ class SX126x final : public Component,
   void set_dio1_pin(GPIOPin *dio1_pin) { this->dio1_pin_ = dio1_pin; }
   void set_frequency(uint32_t frequency) { this->frequency_ = frequency; }
   void set_sx1261(bool sx1261) { this->sx1261_ = sx1261; }
-  void set_mode_rx();
-  void set_mode_tx();
-  void set_mode_standby(SX126xStandbyMode mode);
-  void set_mode_sleep(bool cold = false);
+  void set_mode_rx() { this->set_mode_rx_(); }
+  void set_mode_tx() { this->set_mode_tx_(); }
+  void set_mode_standby(SX126xStandbyMode mode) { this->set_mode_standby_(mode); }
+  void set_mode_sleep(bool cold = false) { this->set_mode_sleep_(cold); }
   void set_modulation(uint8_t modulation) { this->modulation_ = modulation; }
   void set_pa_power(int8_t power) { this->pa_power_ = power; }
   void set_pa_ramp(uint8_t ramp) { this->pa_ramp_ = ramp; }
@@ -97,7 +97,7 @@ class SX126x final : public Component,
   void set_sync_value(const std::vector<uint8_t> &sync_value) { this->sync_value_ = sync_value; }
   void set_tcxo_voltage(uint8_t tcxo_voltage) { this->tcxo_voltage_ = tcxo_voltage; }
   void set_tcxo_delay(uint32_t tcxo_delay) { this->tcxo_delay_ = tcxo_delay; }
-  void run_image_cal();
+  void run_image_cal() { this->run_image_cal_(); }
   void configure();
   SX126xError transmit_packet(const uint8_t *data, size_t len);
   SX126xError transmit_packet(const std::vector<uint8_t> &packet) {
@@ -110,15 +110,22 @@ class SX126x final : public Component,
   static void gpio_intr(SX126x *arg);
   void configure_fsk_ook_();
   void configure_lora_();
-  void set_packet_params_(uint8_t payload_length);
-  uint8_t read_fifo_(uint8_t offset, std::vector<uint8_t> &packet);
-  void write_fifo_(uint8_t offset, const uint8_t *data, size_t len);
-  void write_opcode_(uint8_t opcode, uint8_t *data, uint8_t size);
-  uint8_t read_opcode_(uint8_t opcode, uint8_t *data, uint8_t size);
-  void write_register_(uint16_t reg, uint8_t *data, uint8_t size);
-  void read_register_(uint16_t reg, uint8_t *data, uint8_t size);
+  bool set_packet_params_(uint8_t payload_length);
+  bool read_fifo_(uint8_t offset, std::vector<uint8_t> &packet);
+  bool write_fifo_(uint8_t offset, const uint8_t *data, size_t len);
+  bool write_opcode_(uint8_t opcode, uint8_t *data, uint8_t size);
+  bool read_opcode_(uint8_t opcode, uint8_t *data, uint8_t size);
+  bool write_register_(uint16_t reg, uint8_t *data, uint8_t size);
+  bool read_register_(uint16_t reg, uint8_t *data, uint8_t size);
   void call_listeners_(const std::vector<uint8_t> &packet, float rssi, float snr);
-  void wait_busy_();
+  bool wait_busy_();
+  bool begin_command_();
+  bool configure_();
+  bool run_image_cal_();
+  bool set_mode_rx_();
+  bool set_mode_tx_();
+  bool set_mode_standby_(SX126xStandbyMode mode);
+  bool set_mode_sleep_(bool cold = false);
   Trigger<std::vector<uint8_t>, float, float> packet_trigger_;
   std::vector<SX126xListener *> listeners_;
   std::vector<uint8_t> packet_;
@@ -136,7 +143,7 @@ class SX126x final : public Component,
   uint16_t whitening_initial_{0};
   uint16_t preamble_detect_{0};
   uint16_t preamble_size_{0};
-  char version_[16];
+  char version_[16]{};
   SX126xBw bandwidth_{SX126X_BW_125000};
   uint8_t crc_size_{0};
   uint8_t tcxo_voltage_{0};
