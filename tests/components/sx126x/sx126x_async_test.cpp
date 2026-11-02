@@ -359,4 +359,70 @@ TEST(SX126xAsync, TwoRadiosHaveIndependentOwnersAndCompletion) {
   EXPECT_EQ(second.results, (std::vector<SX126xError>{SX126xError::NONE}));
 }
 
+TEST(SX126xAsync, BackToBackReceiveEchoPreservesBorrowedPacketForAllListeners) {
+  class EchoListener : public SX126xListener {
+   public:
+    std::function<void(const std::vector<uint8_t> &)> callback;
+    void on_packet(const std::vector<uint8_t> &packet, float rssi, float snr) override { callback(packet); }
+  } echo;
+  RadioHardware hw;
+  TransmitListener tx;
+  PacketListener observer;
+  hw.configure(true, true);
+  hw.auto_complete = false;
+  hw.radio.register_listener(&echo);
+  hw.radio.register_listener(&observer);
+  const auto first = hw.packet;
+  const std::vector<uint8_t> second(200, 0xA5);
+  unsigned calls = 0;
+  echo.callback = [&](const std::vector<uint8_t> &packet) {
+    if (++calls == 1) {
+      hw.packet = second;  // Larger back-to-back RX could reallocate the driver's packet_.
+      hw.irq = IRQ_RX_DONE;
+      const auto count = hw.transactions.size();
+      hw.radio.loop();  // Explicit loop reentry must not overwrite the borrowed RX buffer either.
+      EXPECT_EQ(hw.radio.start_transmit_async(&tx, packet), SX126xError::SX126X_ERROR_BUSY);
+      EXPECT_EQ(hw.transactions.size(), count);
+      EXPECT_EQ(packet, first);
+    } else {
+      EXPECT_EQ(packet, second);
+      EXPECT_EQ(hw.radio.start_transmit_async(&tx, packet), SX126xError::NONE);
+    }
+  };
+  hw.irq = IRQ_RX_DONE;
+  hw.radio.loop();
+  ASSERT_EQ(observer.packets.size(), 1u);
+  EXPECT_EQ(observer.packets[0], first);
+  EXPECT_TRUE(tx.results.empty());
+  EXPECT_FALSE(hw.radio.is_transmitting());
+  hw.radio.loop();
+  ASSERT_EQ(observer.packets.size(), 2u);
+  EXPECT_EQ(observer.packets[1], second);
+  ASSERT_EQ(calls, 2u);
+  auto fifo = std::find_if(hw.transactions.rbegin(), hw.transactions.rend(),
+                           [](const auto &cmd) { return !cmd.empty() && cmd[0] == RADIO_WRITE_BUFFER; });
+  ASSERT_NE(fifo, hw.transactions.rend());
+  EXPECT_EQ(std::vector<uint8_t>(fifo->begin() + 2, fifo->end()), second);
+  hw.irq = IRQ_TX_DONE;
+  hw.radio.loop();
+  EXPECT_EQ(tx.results, (std::vector<SX126xError>{SX126xError::NONE}));
+}
+
+TEST(SX126xAsync, FailedReconfigurationRejectsAsyncUntilReconfigured) {
+  RadioHardware hw;
+  TransmitListener listener;
+  hw.configure(true, true);
+  hw.clear_trace();
+  hw.fail_at = 3;
+  hw.radio.configure();
+  hw.clear_trace();
+  EXPECT_EQ(hw.radio.start_transmit_async(&listener, hw.packet), SX126xError::SX126X_ERROR_NOT_READY);
+  EXPECT_TRUE(hw.transactions.empty());
+  EXPECT_TRUE(listener.results.empty());
+  hw.radio.configure();
+  ASSERT_EQ(hw.radio.start_transmit_async(&listener, hw.packet), SX126xError::NONE);
+  hw.radio.loop();
+  EXPECT_EQ(listener.results, (std::vector<SX126xError>{SX126xError::NONE}));
+}
+
 }  // namespace esphome::sx126x::testing

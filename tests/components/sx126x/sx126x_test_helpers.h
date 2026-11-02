@@ -57,7 +57,8 @@ class RadioHardware {
             break;
           case RADIO_SET_TX:
             this->sends++;
-            this->irq = this->auto_complete ? IRQ_TX_DONE : 0;
+            if (this->auto_complete)
+              this->irq |= IRQ_TX_DONE;
             break;
           case RADIO_SET_RX:
             this->receiving = true;

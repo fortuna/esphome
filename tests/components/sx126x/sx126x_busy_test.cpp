@@ -134,4 +134,70 @@ TEST(SX126xBusy, RejectsSendBeforeSetupWithoutTouchingPins) {
   EXPECT_EQ(hardware.dio.reads, 0u);
 }
 
+TEST(SX126xBusy, FailedReconfigurationRequiresSuccessfulConfigureBeforeOperations) {
+  RadioHardware reference;
+  reference.configure(true, true);
+  const size_t count = reference.transactions.size();
+  for (size_t fault = 1; fault <= count; fault++) {
+    SCOPED_TRACE(fault);
+    RadioHardware hw;
+    PacketListener listener;
+    hw.configure(true, true);
+    hw.radio.register_listener(&listener);
+    hw.clear_trace();
+    hw.fail_at = fault;
+    hw.radio.configure();
+    EXPECT_FALSE(hw.radio.is_failed());
+    hw.clear_trace();
+    EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::SX126X_ERROR_NOT_READY);
+    hw.irq = IRQ_RX_DONE;
+    hw.radio.loop();
+    hw.radio.set_mode_rx();
+    hw.radio.set_mode_tx();
+    hw.radio.set_mode_standby(STDBY_XOSC);
+    hw.radio.set_mode_sleep();
+    hw.radio.run_image_cal();
+    EXPECT_TRUE(hw.transactions.empty());
+    EXPECT_TRUE(listener.packets.empty());
+    hw.radio.configure();
+    EXPECT_FALSE(hw.radio.status_has_warning());
+    EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::NONE);
+  }
+}
+
+TEST(SX126xBusy, RetryClearsStaleTxDoneBeforeWaitingForDelayedCompletion) {
+  RadioHardware reference;
+  reference.configure(true, true);
+  reference.clear_trace();
+  reference.radio.transmit_packet(reference.packet);
+  size_t cleanup = 0;
+  bool sent = false;
+  for (size_t i = 0; i < reference.transactions.size(); i++) {
+    if (reference.transactions[i][0] == RADIO_SET_TX)
+      sent = true;
+    if (sent && reference.transactions[i][0] == RADIO_CLR_IRQSTATUS) {
+      cleanup = i + 1;
+      break;
+    }
+  }
+  ASSERT_NE(cleanup, 0u);
+  RadioHardware hw;
+  hw.configure(true, true);
+  hw.clear_trace();
+  hw.fail_at = cleanup;
+  ASSERT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::SX126X_ERROR_BUSY_TIMEOUT);
+  ASSERT_NE(hw.irq & IRQ_TX_DONE, 0);
+  hw.clear_trace();
+  hw.auto_complete = false;
+  unsigned polls = 0;
+  hw.dio.on_read = [&]() {
+    if (++polls == 5)
+      hw.irq |= IRQ_TX_DONE;
+    return hw.irq != 0;
+  };
+  EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::NONE);
+  EXPECT_EQ(polls, 5u);
+  EXPECT_TRUE(hw.receiving);
+}
+
 }  // namespace esphome::sx126x::testing

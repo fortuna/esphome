@@ -93,19 +93,19 @@ class SX126x final : public Component,
   void set_frequency(uint32_t frequency) { this->frequency_ = frequency; }
   void set_sx1261(bool sx1261) { this->sx1261_ = sx1261; }
   void set_mode_rx() {
-    if (this->can_change_mode_())
+    if (this->configured_ && this->can_change_mode_())
       this->set_mode_rx_();
   }
   void set_mode_tx() {
-    if (this->can_change_mode_())
+    if (this->configured_ && this->can_change_mode_())
       this->set_mode_tx_();
   }
   void set_mode_standby(SX126xStandbyMode mode) {
-    if (this->can_change_mode_())
+    if (this->configured_ && this->can_change_mode_())
       this->set_mode_standby_(mode);
   }
   void set_mode_sleep(bool cold = false) {
-    if (this->can_change_mode_())
+    if (this->configured_ && this->can_change_mode_())
       this->set_mode_sleep_(cold);
   }
   void set_modulation(uint8_t modulation) { this->modulation_ = modulation; }
@@ -123,7 +123,7 @@ class SX126x final : public Component,
   void set_tcxo_voltage(uint8_t tcxo_voltage) { this->tcxo_voltage_ = tcxo_voltage; }
   void set_tcxo_delay(uint32_t tcxo_delay) { this->tcxo_delay_ = tcxo_delay; }
   void run_image_cal() {
-    if (this->can_change_mode_())
+    if (this->configured_ && this->can_change_mode_())
       this->run_image_cal_();
   }
   void configure();
@@ -136,6 +136,7 @@ class SX126x final : public Component,
   // must live until exactly one completion. Rejection returns an error without a callback.
   // Timeout is 1..262143 ms. SPI/BUSY waits remain synchronous; airtime does not.
   // Pending RX is delivered during admission, with nested sends/mode changes rejected.
+  // An RX callback send returns BUSY if another IRQ is pending; retry after dispatch.
   SX126xError start_transmit_async(SX126xTransmitListener *listener, const uint8_t *data, size_t len,
                                    uint32_t timeout_ms = 4000);
   SX126xError start_transmit_async(SX126xTransmitListener *listener, const std::vector<uint8_t> &packet,
@@ -163,6 +164,7 @@ class SX126x final : public Component,
   bool write_register_(uint16_t reg, uint8_t *data, uint8_t size);
   bool read_register_(uint16_t reg, uint8_t *data, uint8_t size);
   void call_listeners_(const std::vector<uint8_t> &packet, float rssi, float snr);
+  bool configured_{false};
   bool wait_busy_();
   bool begin_command_();
   bool configure_();
@@ -180,6 +182,7 @@ class SX126x final : public Component,
   uint32_t tx_started_ms_{0};
   uint32_t tx_timeout_ms_{0};
   bool tx_active_{false};
+  bool rx_dispatching_{false};
   Trigger<std::vector<uint8_t>, float, float> packet_trigger_;
   std::vector<SX126xListener *> listeners_;
   std::vector<uint8_t> packet_;
