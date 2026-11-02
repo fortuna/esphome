@@ -79,10 +79,22 @@ class SX126x final : public Component,
   void set_dio1_pin(GPIOPin *dio1_pin) { this->dio1_pin_ = dio1_pin; }
   void set_frequency(uint32_t frequency) { this->frequency_ = frequency; }
   void set_sx1261(bool sx1261) { this->sx1261_ = sx1261; }
-  void set_mode_rx() { this->set_mode_rx_(); }
-  void set_mode_tx() { this->set_mode_tx_(); }
-  void set_mode_standby(SX126xStandbyMode mode) { this->set_mode_standby_(mode); }
-  void set_mode_sleep(bool cold = false) { this->set_mode_sleep_(cold); }
+  void set_mode_rx() {
+    if (this->configured_)
+      this->set_mode_rx_();
+  }
+  void set_mode_tx() {
+    if (this->configured_)
+      this->set_mode_tx_();
+  }
+  void set_mode_standby(SX126xStandbyMode mode) {
+    if (this->configured_)
+      this->set_mode_standby_(mode);
+  }
+  void set_mode_sleep(bool cold = false) {
+    if (this->configured_)
+      this->set_mode_sleep_(cold);
+  }
   void set_modulation(uint8_t modulation) { this->modulation_ = modulation; }
   void set_pa_power(int8_t power) { this->pa_power_ = power; }
   void set_pa_ramp(uint8_t ramp) { this->pa_ramp_ = ramp; }
@@ -97,7 +109,10 @@ class SX126x final : public Component,
   void set_sync_value(const std::vector<uint8_t> &sync_value) { this->sync_value_ = sync_value; }
   void set_tcxo_voltage(uint8_t tcxo_voltage) { this->tcxo_voltage_ = tcxo_voltage; }
   void set_tcxo_delay(uint32_t tcxo_delay) { this->tcxo_delay_ = tcxo_delay; }
-  void run_image_cal() { this->run_image_cal_(); }
+  void run_image_cal() {
+    if (this->configured_)
+      this->run_image_cal_();
+  }
   void configure();
   SX126xError transmit_packet(const uint8_t *data, size_t len);
   SX126xError transmit_packet(const std::vector<uint8_t> &packet) {
@@ -118,6 +133,7 @@ class SX126x final : public Component,
   bool write_register_(uint16_t reg, uint8_t *data, uint8_t size);
   bool read_register_(uint16_t reg, uint8_t *data, uint8_t size);
   void call_listeners_(const std::vector<uint8_t> &packet, float rssi, float snr);
+  bool configured_{false};
   bool wait_busy_();
   bool begin_command_();
   bool configure_();

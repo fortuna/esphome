@@ -146,6 +146,8 @@ bool SX126x::configure_() {
   }
   uint8_t buf[8];
 
+  // Reset discards the previous profile; only a complete configuration restores readiness.
+  this->configured_ = false;
   // toggle chip reset
   this->rst_pin_->digital_write(true);
   delayMicroseconds(RESET_DELAY_HIGH_US);
@@ -349,6 +351,7 @@ bool SX126x::configure_() {
       return false;
     }
   }
+  this->configured_ = true;
   return true;
 }
 
@@ -395,7 +398,7 @@ bool SX126x::set_packet_params_(uint8_t payload_length) {
 
 SX126xError SX126x::transmit_packet(const uint8_t *data, size_t len) {
   // Callers such as a template number's on_value can run before setup() or after a failed setup
-  if (!this->is_ready()) {
+  if (!this->is_ready() || !this->configured_) {
     ESP_LOGW(TAG, "Radio not ready, packet dropped");
     return SX126xError::SX126X_ERROR_NOT_READY;
   }
@@ -416,6 +419,10 @@ SX126xError SX126x::transmit_packet(const uint8_t *data, size_t len) {
     return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
   }
   if (!this->write_fifo_(0x00, data, len)) {
+    return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
+  }
+  uint8_t clear[2] = {0xFF, 0xFF};
+  if (!this->write_opcode_(RADIO_CLR_IRQSTATUS, clear, 2)) {
     return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
   }
   if (!this->set_mode_tx_()) {
@@ -462,7 +469,7 @@ void SX126x::call_listeners_(const std::vector<uint8_t> &packet, float rssi, flo
 }
 
 void SX126x::loop() {
-  if (this->is_failed()) {
+  if (this->is_failed() || !this->configured_) {
     return;
   }
   if (!this->dio1_pin_->digital_read()) {
