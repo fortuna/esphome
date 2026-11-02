@@ -117,8 +117,6 @@ bool SX126x::write_register_(uint16_t reg, uint8_t *data, uint8_t size) {
   return true;
 }
 
-void IRAM_ATTR SX126x::gpio_intr(SX126x *arg) { arg->enable_loop_soon_any_context(); }
-
 void SX126x::setup() {
   // setup pins
   this->busy_pin_->setup();
@@ -138,7 +136,18 @@ void SX126x::setup() {
   }
 }
 
-void SX126x::configure() { this->configure_(); }
+void SX126x::configure() {
+  if (this->can_change_mode_())
+    this->configure_();
+}
+
+bool SX126x::can_change_mode_() {
+  if (this->tx_listener_ != nullptr) {
+    ESP_LOGW(TAG, "Async transmit in progress, mode change ignored");
+    return false;
+  }
+  return true;
+}
 
 bool SX126x::configure_() {
   if (this->is_failed()) {
@@ -394,6 +403,8 @@ bool SX126x::set_packet_params_(uint8_t payload_length) {
 }
 
 SX126xError SX126x::transmit_packet(const uint8_t *data, size_t len) {
+  if (this->tx_listener_ != nullptr)
+    return SX126xError::SX126X_ERROR_BUSY;
   // Callers such as a template number's on_value can run before setup() or after a failed setup
   if (!this->is_ready()) {
     ESP_LOGW(TAG, "Radio not ready, packet dropped");
@@ -454,6 +465,67 @@ SX126xError SX126x::transmit_packet(const uint8_t *data, size_t len) {
   return ret;
 }
 
+SX126xError SX126x::start_transmit_async(SX126xTransmitListener *listener, const uint8_t *data, size_t len,
+                                         uint32_t timeout_ms) {
+  if (!this->is_ready())
+    return SX126xError::SX126X_ERROR_NOT_READY;
+  if (this->tx_listener_ != nullptr)
+    return SX126xError::SX126X_ERROR_BUSY;
+  if (listener == nullptr || data == nullptr || len == 0 || len > this->get_max_packet_size() ||
+      (this->payload_length_ > 0 && len != this->payload_length_) || timeout_ms == 0 || timeout_ms > 262143) {
+    return SX126xError::INVALID_PARAMS;
+  }
+
+  // Reserve before delivering pending RX, whose callbacks may try to send or change modes.
+  this->tx_listener_ = listener;
+  uint16_t status;
+  if (this->dio1_pin_->digital_read() && (!this->read_irq_(status) || !this->receive_packet_(status))) {
+    this->tx_listener_ = nullptr;
+    return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
+  }
+  uint8_t clear[2] = {0xFF, 0xFF};
+  if (!this->set_mode_standby_(STDBY_XOSC) || !this->write_opcode_(RADIO_CLR_IRQSTATUS, clear, 2) ||
+      (this->payload_length_ == 0 && !this->set_packet_params_(len)) || !this->write_fifo_(0, data, len) ||
+      !this->set_mode_tx_(timeout_ms)) {
+    // A partial start can leave RX disabled. Attempt restoration without accepting a send.
+    this->restore_after_transmit_();
+    this->tx_listener_ = nullptr;
+    return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
+  }
+  this->tx_started_ms_ = millis();
+  this->tx_timeout_ms_ = timeout_ms;
+  this->tx_active_ = true;
+  this->enable_loop();  // Keep checking the software deadline even without a DIO1 edge.
+  return SX126xError::NONE;
+}
+
+bool SX126x::restore_after_transmit_() {
+  uint8_t clear[2] = {0xFF, 0xFF};
+  if (!this->set_mode_standby_(STDBY_XOSC) || !this->write_opcode_(RADIO_CLR_IRQSTATUS, clear, 2) ||
+      (this->payload_length_ == 0 && !this->set_packet_params_(this->get_max_packet_size()))) {
+    return false;
+  }
+  return this->rx_start_ ? this->set_mode_rx_() : this->set_mode_sleep_();
+}
+
+void SX126x::finish_async_transmit_(SX126xError result) {
+  if (!this->tx_active_)
+    return;
+  this->tx_active_ = false;
+  if (!this->restore_after_transmit_())
+    result = SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
+  auto *listener = this->tx_listener_;
+  this->tx_listener_ = nullptr;
+  listener->on_transmit_complete(result);
+}
+
+bool SX126x::cancel_transmit_async(SX126xTransmitListener *listener) {
+  if (!this->tx_active_ || listener == nullptr || listener != this->tx_listener_)
+    return false;
+  this->finish_async_transmit_(SX126xError::SX126X_ERROR_CANCELLED);
+  return true;
+}
+
 void SX126x::call_listeners_(const std::vector<uint8_t> &packet, float rssi, float snr) {
   for (auto &listener : this->listeners_) {
     listener->on_packet(packet, rssi, snr);
@@ -463,30 +535,62 @@ void SX126x::call_listeners_(const std::vector<uint8_t> &packet, float rssi, flo
 
 void SX126x::loop() {
   if (this->is_failed()) {
+    this->finish_async_transmit_(SX126xError::SX126X_ERROR_NOT_READY);
     return;
   }
-  if (!this->dio1_pin_->digital_read()) {
-    if (this->dio1_pin_->is_internal()) {
-      this->disable_loop();
+  // Admission/cleanup can invoke user callbacks; do not process IRQs recursively.
+  if (this->tx_listener_ != nullptr && !this->tx_active_)
+    return;
+  if (this->tx_active_) {
+    if (this->dio1_pin_->digital_read()) {
+      uint16_t status;
+      if (!this->read_irq_(status)) {
+        this->finish_async_transmit_(SX126xError::SX126X_ERROR_BUSY_TIMEOUT);
+        return;
+      }
+      if (status & IRQ_RX_TX_TIMEOUT) {
+        this->finish_async_transmit_(SX126xError::TIMEOUT);
+        return;
+      }
+      if (status & IRQ_TX_DONE) {
+        this->finish_async_transmit_(SX126xError::NONE);
+        return;
+      }
+    }
+    // Signed subtraction handles rollover and a cached loop tick preceding admission.
+    if (static_cast<int32_t>(App.get_loop_component_start_time() - this->tx_started_ms_) >=
+        static_cast<int32_t>(this->tx_timeout_ms_)) {
+      this->finish_async_transmit_(SX126xError::TIMEOUT);
     }
     return;
   }
-
+  if (!this->dio1_pin_->digital_read()) {
+    if (this->dio1_pin_->is_internal())
+      this->disable_loop();
+    return;
+  }
   uint16_t status;
+  if (this->read_irq_(status))
+    this->receive_packet_(status);
+}
+
+bool SX126x::read_irq_(uint16_t &status) {
+  uint8_t buf[2];
+  if (!this->read_opcode_(RADIO_GET_IRQSTATUS, buf, 2) || !this->write_opcode_(RADIO_CLR_IRQSTATUS, buf, 2)) {
+    return false;
+  }
+  status = (uint16_t(buf[0]) << 8) | buf[1];
+  return true;
+}
+
+bool SX126x::receive_packet_(uint16_t status) {
   uint8_t buf[3];
   uint8_t rssi;
   int8_t snr;
-  if (!this->read_opcode_(RADIO_GET_IRQSTATUS, buf, 2)) {
-    return;
-  }
-  if (!this->write_opcode_(RADIO_CLR_IRQSTATUS, buf, 2)) {
-    return;
-  }
-  status = (buf[0] << 8) | buf[1];
   if ((status & IRQ_RX_DONE) == IRQ_RX_DONE) {
     if ((status & IRQ_CRC_ERROR) != IRQ_CRC_ERROR) {
       if (!this->read_opcode_(RADIO_GET_PACKETSTATUS, buf, 3)) {
-        return;
+        return false;
       }
       if (this->modulation_ == PACKET_TYPE_LORA) {
         rssi = buf[0];
@@ -496,15 +600,16 @@ void SX126x::loop() {
         snr = 0;
       }
       if (!this->read_opcode_(RADIO_GET_RXBUFFERSTATUS, buf, 2)) {
-        return;
+        return false;
       }
       this->packet_.resize(buf[0]);
       if (!this->read_fifo_(buf[1], this->packet_)) {
-        return;
+        return false;
       }
       this->call_listeners_(this->packet_, (float) rssi / -2.0f, (float) snr / 4.0f);
     }
   }
+  return true;
 }
 
 bool SX126x::run_image_cal_() {
@@ -565,7 +670,7 @@ bool SX126x::set_mode_rx_() {
   return this->write_opcode_(RADIO_SET_RX, buf, 3);
 }
 
-bool SX126x::set_mode_tx_() {
+bool SX126x::set_mode_tx_(uint32_t timeout_ms) {
   uint8_t buf[8];
 
   // configure irq params
@@ -582,10 +687,11 @@ bool SX126x::set_mode_tx_() {
     return false;
   }
 
-  // switch to single mode tx
-  buf[0] = 0x00;
-  buf[1] = 0x00;
-  buf[2] = 0x00;
+  // SX126x timeout units are 15.625 us, or 64 ticks per millisecond.
+  const uint32_t ticks = timeout_ms * 64;
+  buf[0] = ticks >> 16;
+  buf[1] = ticks >> 8;
+  buf[2] = ticks;
   return this->write_opcode_(RADIO_SET_TX, buf, 3);
 }
 

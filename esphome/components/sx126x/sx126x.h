@@ -48,7 +48,20 @@ enum SX126xBw : uint8_t {
   SX126X_BW_500000,
 };
 
-enum class SX126xError { NONE = 0, TIMEOUT, INVALID_PARAMS, SX126X_ERROR_NOT_READY, SX126X_ERROR_BUSY_TIMEOUT };
+enum class SX126xError {
+  NONE = 0,
+  TIMEOUT,
+  INVALID_PARAMS,
+  SX126X_ERROR_NOT_READY,
+  SX126X_ERROR_BUSY_TIMEOUT,
+  SX126X_ERROR_BUSY,
+  SX126X_ERROR_CANCELLED,
+};
+
+class SX126xTransmitListener {
+ public:
+  virtual void on_transmit_complete(SX126xError result) = 0;
+};
 
 class SX126xListener {
  public:
@@ -79,10 +92,22 @@ class SX126x final : public Component,
   void set_dio1_pin(GPIOPin *dio1_pin) { this->dio1_pin_ = dio1_pin; }
   void set_frequency(uint32_t frequency) { this->frequency_ = frequency; }
   void set_sx1261(bool sx1261) { this->sx1261_ = sx1261; }
-  void set_mode_rx() { this->set_mode_rx_(); }
-  void set_mode_tx() { this->set_mode_tx_(); }
-  void set_mode_standby(SX126xStandbyMode mode) { this->set_mode_standby_(mode); }
-  void set_mode_sleep(bool cold = false) { this->set_mode_sleep_(cold); }
+  void set_mode_rx() {
+    if (this->can_change_mode_())
+      this->set_mode_rx_();
+  }
+  void set_mode_tx() {
+    if (this->can_change_mode_())
+      this->set_mode_tx_();
+  }
+  void set_mode_standby(SX126xStandbyMode mode) {
+    if (this->can_change_mode_())
+      this->set_mode_standby_(mode);
+  }
+  void set_mode_sleep(bool cold = false) {
+    if (this->can_change_mode_())
+      this->set_mode_sleep_(cold);
+  }
   void set_modulation(uint8_t modulation) { this->modulation_ = modulation; }
   void set_pa_power(int8_t power) { this->pa_power_ = power; }
   void set_pa_ramp(uint8_t ramp) { this->pa_ramp_ = ramp; }
@@ -97,17 +122,37 @@ class SX126x final : public Component,
   void set_sync_value(const std::vector<uint8_t> &sync_value) { this->sync_value_ = sync_value; }
   void set_tcxo_voltage(uint8_t tcxo_voltage) { this->tcxo_voltage_ = tcxo_voltage; }
   void set_tcxo_delay(uint32_t tcxo_delay) { this->tcxo_delay_ = tcxo_delay; }
-  void run_image_cal() { this->run_image_cal_(); }
+  void run_image_cal() {
+    if (this->can_change_mode_())
+      this->run_image_cal_();
+  }
   void configure();
   SX126xError transmit_packet(const uint8_t *data, size_t len);
   SX126xError transmit_packet(const std::vector<uint8_t> &packet) {
     return this->transmit_packet(packet.data(), packet.size());
   }
+  // Call from the ESPHome main loop context only. Configuration setters are setup-only.
+  // NONE accepts one send: data is copied to the chip FIFO before return, and listener
+  // must live until exactly one completion. Rejection returns an error without a callback.
+  // Timeout is 1..262143 ms. SPI/BUSY waits remain synchronous; airtime does not.
+  // Pending RX is delivered during admission, with nested sends/mode changes rejected.
+  SX126xError start_transmit_async(SX126xTransmitListener *listener, const uint8_t *data, size_t len,
+                                   uint32_t timeout_ms = 4000);
+  SX126xError start_transmit_async(SX126xTransmitListener *listener, const std::vector<uint8_t> &packet,
+                                   uint32_t timeout_ms = 4000) {
+    return this->start_transmit_async(listener, packet.data(), packet.size(), timeout_ms);
+  }
+  // Completion runs in loop(), or synchronously inside cancellation, after attempted
+  // RX/sleep restoration and ownership release. The callback may start another send.
+  // Only the active listener can cancel. True means cancelled, not successful cleanup;
+  // the callback reports CANCELLED or BUSY_TIMEOUT if restoration failed.
+  bool cancel_transmit_async(SX126xTransmitListener *listener);
+  bool is_transmitting() const { return this->tx_listener_ != nullptr; }
   void register_listener(SX126xListener *listener) { this->listeners_.push_back(listener); }
   Trigger<std::vector<uint8_t>, float, float> *get_packet_trigger() { return &this->packet_trigger_; }
 
  protected:
-  static void gpio_intr(SX126x *arg);
+  static void IRAM_ATTR gpio_intr(SX126x *arg) { arg->enable_loop_soon_any_context(); }
   void configure_fsk_ook_();
   void configure_lora_();
   bool set_packet_params_(uint8_t payload_length);
@@ -123,9 +168,18 @@ class SX126x final : public Component,
   bool configure_();
   bool run_image_cal_();
   bool set_mode_rx_();
-  bool set_mode_tx_();
+  bool set_mode_tx_(uint32_t timeout_ms = 0);
   bool set_mode_standby_(SX126xStandbyMode mode);
   bool set_mode_sleep_(bool cold = false);
+  bool can_change_mode_();
+  bool read_irq_(uint16_t &status);
+  bool receive_packet_(uint16_t status);
+  bool restore_after_transmit_();
+  void finish_async_transmit_(SX126xError result);
+  SX126xTransmitListener *tx_listener_{nullptr};
+  uint32_t tx_started_ms_{0};
+  uint32_t tx_timeout_ms_{0};
+  bool tx_active_{false};
   Trigger<std::vector<uint8_t>, float, float> packet_trigger_;
   std::vector<SX126xListener *> listeners_;
   std::vector<uint8_t> packet_;
