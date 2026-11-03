@@ -20,8 +20,9 @@ class TestPin : public GPIOPin {
   }
   void digital_write(bool level) override {
     this->level = level;
-    if (this->on_write)
+    if (this->on_write) {
       this->on_write(level);
+    }
   }
   bool is_internal() override { return this->internal; }
 
@@ -50,8 +51,9 @@ class RadioHardware {
         this->selected_ = false;
         this->ends++;
         const auto &command = this->transactions.back();
-        if (command.empty())
+        if (command.empty()) {
           return;
+        }
         switch (command[0]) {
           case RADIO_SET_PACKETPARAMS:
             this->packet_params = command;
@@ -61,8 +63,9 @@ class RadioHardware {
             break;
           case RADIO_SET_TX:
             this->sends++;
-            if (this->auto_complete)
+            if (this->auto_complete) {
               this->irq |= IRQ_TX_DONE;
+            }
             break;
           case RADIO_SET_RX:
             this->receiving = true;
@@ -150,8 +153,9 @@ class RadioHardware {
 
  protected:
   uint8_t reply_byte_(const std::vector<uint8_t> &command) {
-    if (command.empty())
+    if (command.empty()) {
       return 0;
+    }
     const size_t pos = command.size();
     switch (command[0]) {
       case RADIO_READ_REGISTER:
@@ -161,24 +165,31 @@ class RadioHardware {
         }
         break;
       case RADIO_GET_IRQSTATUS:
-        if (pos == 2)
+        if (pos == 2) {
           return this->irq >> 8;
-        if (pos == 3)
+        }
+        if (pos == 3) {
           return this->irq & 0xFF;
+        }
         break;
       case RADIO_GET_PACKETSTATUS:
-        if (pos == 2)
+        if (pos == 2) {
           return 80;
-        if (pos == 3)
+        }
+        if (pos == 3) {
           return 40;
-        if (pos == 4)
+        }
+        if (pos == 4) {
           return 84;
+        }
         break;
       case RADIO_GET_RXBUFFERSTATUS:
-        if (pos == 2)
+        if (pos == 2) {
           return this->packet.size();
-        if (pos == 3)
+        }
+        if (pos == 3) {
           return 7;
+        }
         break;
       case RADIO_READ_BUFFER:
         if (pos >= 3) {
@@ -264,8 +275,9 @@ TEST_P(SX126xBusyTransmit, StopsAtEverySendAndCleanupCommandAndCanRetry) {
     EXPECT_TRUE(hardware.cs.level);
     EXPECT_EQ(hardware.ends, hardware.transactions.size());
     EXPECT_FALSE(hardware.radio.is_failed());
-    if (hardware.sends == 0)
+    if (hardware.sends == 0) {
       EXPECT_EQ(hardware.dio.reads, 0u);  // Never enter the 4-second TX wait after a failed start.
+    }
     hardware.clear_trace();
     hardware.radio.configure();
     EXPECT_EQ(hardware.radio.transmit_packet(hardware.packet), SX126xError::NONE);
@@ -309,8 +321,9 @@ TEST_P(SX126xBusyTransmit, RestoresEveryPreparationFailureWithoutAnotherTransmis
     const auto sends = hw.sends;
     hw.clear_trace();
     if (rx) {
-      if (!fixed)
+      if (!fixed) {
         hw.packet.resize(9, 0x55);  // RX must accept a different length than the attempted TX.
+      }
       hw.irq = IRQ_RX_DONE;
       hw.radio.loop();
       ASSERT_EQ(listener.packets.size(), 1u);
@@ -329,8 +342,9 @@ TEST_P(SX126xBusyTransmit, FailedRestorationRequiresConfigureBeforeReceiveRecove
   size_t restoration = 0;
   bool sent = false;
   for (size_t i = 0; i < reference.transactions.size(); i++) {
-    if (reference.transactions[i][0] == RADIO_SET_TX)
+    if (reference.transactions[i][0] == RADIO_SET_TX) {
       sent = true;
+    }
     if (sent && reference.transactions[i][0] == RADIO_SET_STANDBY) {
       restoration = i + 1;
       break;
@@ -514,8 +528,9 @@ TEST(SX126xBusy, RetryClearsStaleTxDoneBeforeWaitingForDelayedCompletion) {
   size_t cleanup = 0;
   bool sent = false;
   for (size_t i = 0; i < reference.transactions.size(); i++) {
-    if (reference.transactions[i][0] == RADIO_SET_TX)
+    if (reference.transactions[i][0] == RADIO_SET_TX) {
       sent = true;
+    }
     if (sent && reference.transactions[i][0] == RADIO_CLR_IRQSTATUS) {
       cleanup = i + 1;
       break;
@@ -534,8 +549,9 @@ TEST(SX126xBusy, RetryClearsStaleTxDoneBeforeWaitingForDelayedCompletion) {
   hw.auto_complete = false;
   unsigned polls = 0;
   hw.dio.on_read = [&]() {
-    if (++polls == 5)
+    if (++polls == 5) {
       hw.irq |= IRQ_TX_DONE;
+    }
     return hw.irq != 0;
   };
   EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::NONE);
@@ -588,8 +604,9 @@ TEST(SX126xBusy, ConfigurationCannotReenterSendPreparationOrRestoration) {
   unsigned guarded = 0;
   hw.cs.on_write = [&](bool high) {
     write(high);
-    if (!high || hw.transactions.back().empty() || hw.transactions.back()[0] != RADIO_SET_STANDBY)
+    if (!high || hw.transactions.back().empty() || hw.transactions.back()[0] != RADIO_SET_STANDBY) {
       return;
+    }
     guarded++;
     const auto commands = hw.transactions.size();
     hw.radio.configure();

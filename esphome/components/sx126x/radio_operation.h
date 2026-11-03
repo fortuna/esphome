@@ -29,14 +29,16 @@ class RadioOperation {
            this->state_ == State::STATE_RESTORING;
   }
   SX126xError transmit_admission() const {
-    if (this->is_ready())
+    if (this->is_ready()) {
       return SX126xError::NONE;
+    }
     return this->is_active() ? SX126xError::SX126X_ERROR_BUSY : SX126xError::SX126X_ERROR_NOT_READY;
   }
 
   template<typename Apply> [[nodiscard]] bool configure(Apply &&apply) {
-    if (this->is_active())
+    if (this->is_active()) {
       return false;
+    }
     Attempt attempt(*this, State::STATE_CONFIGURING, State::STATE_UNCONFIGURED);
     const bool success = apply();
     attempt.finish(success ? State::STATE_IDLE : State::STATE_UNCONFIGURED);
@@ -44,8 +46,9 @@ class RadioOperation {
   }
 
   template<typename Command> [[nodiscard]] bool change_mode(Command &&command, bool retains_configuration = true) {
-    if (!this->is_ready())
+    if (!this->is_ready()) {
       return false;
+    }
     Attempt attempt(*this, State::STATE_CHANGING_MODE);
     const bool success = command();
     attempt.finish(success ? (retains_configuration ? State::STATE_IDLE : State::STATE_UNCONFIGURED)
@@ -58,8 +61,9 @@ class RadioOperation {
   template<typename Prepare, typename Wait, typename Restore>
   [[nodiscard]] SX126xError transmit(Prepare &&prepare, Wait &&wait, Restore &&restore) {
     const auto admission = this->transmit_admission();
-    if (admission != SX126xError::NONE)
+    if (admission != SX126xError::NONE) {
       return admission;
+    }
     Attempt attempt(*this, State::STATE_PREPARING_TX);
     auto result = SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
     if (prepare()) {
@@ -93,8 +97,9 @@ class RadioOperation {
       this->owner_.state_ = phase;
     }
     ~Attempt() {
-      if (!this->finished_)
+      if (!this->finished_) {
         this->owner_.state_ = this->failure_;
+      }
     }
     Attempt(const Attempt &) = delete;
     Attempt &operator=(const Attempt &) = delete;

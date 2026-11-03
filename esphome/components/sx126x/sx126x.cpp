@@ -84,11 +84,13 @@ void SX126x::setup() {
 void SX126x::configure() { this->configure_(); }
 
 bool SX126x::configure_() {
-  if (this->is_failed())
+  if (this->is_failed()) {
     return false;
+  }
   const bool configured = this->operation_.configure([this]() { return this->apply_configuration_(); });
-  if (configured)
+  if (configured) {
     this->enable_loop();
+  }
   return configured;
 }
 
@@ -348,8 +350,9 @@ SX126xError SX126x::transmit_packet(const uint8_t *data, size_t len) {
     return SX126xError::SX126X_ERROR_NOT_READY;
   }
   const auto admission = this->operation_.transmit_admission();
-  if (admission != SX126xError::NONE)
+  if (admission != SX126xError::NONE) {
     return admission;
+  }
   if (this->payload_length_ > 0 && this->payload_length_ != len) {
     ESP_LOGE(TAG, "Packet size does not match config");
     return SX126xError::INVALID_PARAMS;
@@ -362,8 +365,9 @@ SX126xError SX126x::transmit_packet(const uint8_t *data, size_t len) {
   const auto result = this->operation_.transmit([this, data, len]() { return this->prepare_transmit_(data, len); },
                                                 [this]() { return this->wait_for_transmit_(); },
                                                 [this]() { return this->restore_after_transmit_(); });
-  if (this->operation_.is_ready())
+  if (this->operation_.is_ready()) {
     this->enable_loop();
+  }
   return result;
 }
 
