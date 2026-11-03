@@ -135,6 +135,8 @@ SX126xError SX126x::start_transmit_async(SX126xTransmitListener *listener, const
     const bool restored = this->command_result_(this->restore_after_transmit_());
     this->state_ = restored ? RadioState::RADIO_STATE_IDLE : RadioState::RADIO_STATE_RECOVERY_REQUIRED;
     this->tx_ = {};
+    if (restored)
+      this->enable_loop();
     return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
   }
   this->tx_.started_ms = millis();

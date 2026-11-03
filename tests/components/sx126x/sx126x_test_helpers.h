@@ -49,6 +49,9 @@ class RadioHardware {
         if (command.empty())
           return;
         switch (command[0]) {
+          case RADIO_SET_PACKETPARAMS:
+            this->packet_params = command;
+            break;
           case RADIO_CLR_IRQSTATUS:
             this->irq &= ~((uint16_t(command[1]) << 8) | command[2]);
             break;
@@ -133,6 +136,7 @@ class RadioHardware {
   TestPin cs, busy, dio, rst, clk, mosi, miso;
   std::vector<std::vector<uint8_t>> transactions;
   std::vector<uint8_t> packet{0x11, 0x22, 0x33};
+  std::vector<uint8_t> packet_params;
   size_t fail_at{0};
   size_t ends{0};
   unsigned sends{0};

@@ -429,4 +429,29 @@ TEST(SX126xAsync, BlockingSendUsesIrqResultInsteadOfTreatingAnyDioAsSuccess) {
   EXPECT_TRUE(hw.receiving);
 }
 
+TEST(SX126xAsync, FailedAdmissionRestoresReceivePollingWithoutAnotherTransmission) {
+  RadioHardware hw;
+  PacketListener rx;
+  TransmitListener tx;
+  hw.configure(true, true);
+  hw.radio.register_listener(&rx);
+  const auto configured_params = hw.packet_params;
+  hw.dio.internal = true;
+  hw.radio.call();
+  ASSERT_TRUE(hw.radio.is_idle());
+  hw.clear_trace();
+  hw.fail_at = 3;
+  EXPECT_EQ(hw.radio.start_transmit_async(&tx, hw.packet), SX126xError::SX126X_ERROR_BUSY_TIMEOUT);
+  EXPECT_TRUE(tx.results.empty());
+  EXPECT_TRUE(hw.radio.is_in_loop_state());
+  EXPECT_TRUE(hw.receiving);
+  EXPECT_EQ(hw.packet_params, configured_params);
+  hw.clear_trace();
+  hw.irq = IRQ_RX_DONE;  // No simulated ISR edge: restoration must re-enable polling.
+  hw.radio.call();
+  ASSERT_EQ(rx.packets.size(), 1u);
+  EXPECT_EQ(rx.packets[0], hw.packet);
+  EXPECT_EQ(hw.sends, 0u);
+}
+
 }  // namespace esphome::sx126x::testing
