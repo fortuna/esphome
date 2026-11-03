@@ -105,6 +105,7 @@ class SX126x final : public Component {
  protected:
   static void gpio_intr(SX126x *arg);
   void call_listeners_(const std::vector<uint8_t> &packet, float rssi, float snr);
+  bool restore_after_transmit_();
   bool configured_{false};
   bool command_result_(bool success);
   SpiCommandPort port_;

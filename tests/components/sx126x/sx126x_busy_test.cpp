@@ -53,6 +53,9 @@ class RadioHardware {
         if (command.empty())
           return;
         switch (command[0]) {
+          case RADIO_SET_PACKETPARAMS:
+            this->packet_params = command;
+            break;
           case RADIO_CLR_IRQSTATUS:
             this->irq &= ~((uint16_t(command[1]) << 8) | command[2]);
             break;
@@ -137,6 +140,7 @@ class RadioHardware {
   TestPin cs, busy, dio, rst, clk, mosi, miso;
   std::vector<std::vector<uint8_t>> transactions;
   std::vector<uint8_t> packet{0x11, 0x22, 0x33};
+  std::vector<uint8_t> packet_params;
   size_t fail_at{0};
   size_t ends{0};
   unsigned sends{0};
@@ -256,16 +260,151 @@ TEST_P(SX126xBusyTransmit, StopsAtEverySendAndCleanupCommandAndCanRetry) {
     hardware.fail_at = fault;
     EXPECT_EQ(hardware.radio.transmit_packet(hardware.packet.data(), hardware.packet.size()),
               SX126xError::SX126X_ERROR_BUSY_TIMEOUT);
-    hardware.expect_aborted(fault);
-    EXPECT_TRUE(hardware.radio.status_has_warning());
+    EXPECT_TRUE(hardware.transactions[fault - 1].empty());
+    EXPECT_TRUE(hardware.cs.level);
+    EXPECT_EQ(hardware.ends, hardware.transactions.size());
     EXPECT_FALSE(hardware.radio.is_failed());
     if (hardware.sends == 0)
       EXPECT_EQ(hardware.dio.reads, 0u);  // Never enter the 4-second TX wait after a failed start.
     hardware.clear_trace();
+    hardware.radio.configure();
     EXPECT_EQ(hardware.radio.transmit_packet(hardware.packet), SX126xError::NONE);
     EXPECT_FALSE(hardware.radio.status_has_warning());
     EXPECT_EQ(hardware.receiving, rx);
   }
+}
+
+TEST_P(SX126xBusyTransmit, RestoresEveryPreparationFailureWithoutAnotherTransmission) {
+  const auto [lora, rx, fixed] = GetParam();
+  RadioHardware reference;
+  reference.configure(lora, rx, fixed);
+  reference.clear_trace();
+  ASSERT_EQ(reference.radio.transmit_packet(reference.packet), SX126xError::NONE);
+  size_t tx_command = 0;
+  for (size_t i = 0; i < reference.transactions.size(); i++) {
+    if (reference.transactions[i][0] == RADIO_SET_TX) {
+      tx_command = i + 1;
+      break;
+    }
+  }
+  ASSERT_NE(tx_command, 0u);
+  for (size_t fault = 1; fault <= tx_command; fault++) {
+    SCOPED_TRACE(fault);
+    RadioHardware hw;
+    PacketListener listener;
+    hw.configure(lora, rx, fixed);
+    hw.radio.register_listener(&listener);
+    const auto configured_params = hw.packet_params;
+    hw.clear_trace();
+    hw.fail_at = fault;
+    EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::SX126X_ERROR_BUSY_TIMEOUT);
+    EXPECT_TRUE(hw.transactions[fault - 1].empty());
+    EXPECT_TRUE(hw.cs.level);
+    EXPECT_EQ(hw.ends, hw.transactions.size());
+    EXPECT_EQ(hw.receiving, rx);
+    EXPECT_EQ(hw.packet_params, configured_params);
+    EXPECT_EQ(hw.irq, 0u);
+    EXPECT_FALSE(hw.radio.status_has_warning());
+    EXPECT_FALSE(hw.radio.is_failed());
+    const auto sends = hw.sends;
+    hw.clear_trace();
+    if (rx) {
+      if (!fixed)
+        hw.packet.resize(9, 0x55);  // RX must accept a different length than the attempted TX.
+      hw.irq = IRQ_RX_DONE;
+      hw.radio.loop();
+      ASSERT_EQ(listener.packets.size(), 1u);
+      EXPECT_EQ(listener.packets[0], hw.packet);
+    }
+    EXPECT_EQ(hw.sends, sends);
+  }
+}
+
+TEST_P(SX126xBusyTransmit, FailedRestorationRequiresConfigureBeforeReceiveRecovery) {
+  const auto [lora, rx, fixed] = GetParam();
+  RadioHardware reference;
+  reference.configure(lora, rx, fixed);
+  reference.clear_trace();
+  ASSERT_EQ(reference.radio.transmit_packet(reference.packet), SX126xError::NONE);
+  size_t restoration = 0;
+  bool sent = false;
+  for (size_t i = 0; i < reference.transactions.size(); i++) {
+    if (reference.transactions[i][0] == RADIO_SET_TX)
+      sent = true;
+    if (sent && reference.transactions[i][0] == RADIO_SET_STANDBY) {
+      restoration = i + 1;
+      break;
+    }
+  }
+  ASSERT_NE(restoration, 0u);
+  for (size_t fault = restoration; fault <= reference.transactions.size(); fault++) {
+    SCOPED_TRACE(fault);
+    RadioHardware hw;
+    PacketListener listener;
+    hw.configure(lora, rx, fixed);
+    hw.radio.register_listener(&listener);
+    const auto configured_params = hw.packet_params;
+    hw.clear_trace();
+    hw.fail_at = fault;
+    EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::SX126X_ERROR_BUSY_TIMEOUT);
+    EXPECT_TRUE(hw.cs.level);
+    EXPECT_TRUE(hw.radio.status_has_warning());
+    EXPECT_FALSE(hw.radio.is_failed());
+    const auto sends = hw.sends;
+    hw.clear_trace();  // Clearing BUSY alone must not re-admit partial configuration.
+    hw.irq = IRQ_RX_DONE;
+    hw.radio.loop();
+    hw.radio.set_mode_rx();
+    hw.radio.set_mode_tx();
+    hw.radio.set_mode_standby(STDBY_XOSC);
+    hw.radio.set_mode_sleep();
+    hw.radio.run_image_cal();
+    EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::SX126X_ERROR_NOT_READY);
+    EXPECT_TRUE(hw.transactions.empty());
+    EXPECT_TRUE(listener.packets.empty());
+    EXPECT_TRUE(hw.radio.status_has_warning());
+    hw.irq = 0;  // Hardware reset clears IRQs; the GPIO fake does not model reset.
+    hw.radio.configure();
+    EXPECT_FALSE(hw.radio.status_has_warning());
+    EXPECT_EQ(hw.packet_params, configured_params);
+    EXPECT_EQ(hw.receiving, rx);
+    if (rx) {
+      hw.irq = IRQ_RX_DONE;
+      hw.radio.loop();
+      ASSERT_EQ(listener.packets.size(), 1u);
+      EXPECT_EQ(listener.packets[0], hw.packet);
+    }
+    EXPECT_EQ(hw.sends, sends);  // Recovery must not depend on sending another packet.
+  }
+}
+
+TEST(SX126xBusy, PersistentBusyDuringPreparationAndRestorationRequiresConfigure) {
+  RadioHardware hw;
+  PacketListener listener;
+  hw.configure(true, true);
+  hw.radio.register_listener(&listener);
+  const auto configured_params = hw.packet_params;
+  hw.clear_trace();
+  auto normal_busy = hw.busy.on_read;
+  hw.busy.on_read = [&]() { return hw.transactions.size() >= 3 || normal_busy(); };
+  EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::SX126X_ERROR_BUSY_TIMEOUT);
+  EXPECT_FALSE(hw.receiving);
+  EXPECT_TRUE(hw.radio.status_has_warning());
+  EXPECT_EQ(hw.sends, 0u);
+  hw.busy.on_read = normal_busy;
+  hw.clear_trace();
+  hw.radio.set_mode_rx();
+  hw.radio.run_image_cal();
+  EXPECT_TRUE(hw.transactions.empty());
+  EXPECT_TRUE(hw.radio.status_has_warning());
+  hw.radio.configure();
+  EXPECT_TRUE(hw.receiving);
+  EXPECT_EQ(hw.packet_params, configured_params);
+  hw.irq = IRQ_RX_DONE;
+  hw.radio.loop();
+  ASSERT_EQ(listener.packets.size(), 1u);
+  EXPECT_EQ(listener.packets[0], hw.packet);
+  EXPECT_EQ(hw.sends, 0u);
 }
 
 INSTANTIATE_TEST_SUITE_P(LoRaAndFSKWithRxOrSleepAndFixedOrVariablePayload, SX126xBusyTransmit,
@@ -390,6 +529,8 @@ TEST(SX126xBusy, RetryClearsStaleTxDoneBeforeWaitingForDelayedCompletion) {
   ASSERT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::SX126X_ERROR_BUSY_TIMEOUT);
   ASSERT_NE(hw.irq & IRQ_TX_DONE, 0);
   hw.clear_trace();
+  hw.radio.configure();
+  hw.irq = IRQ_TX_DONE;  // A stale flag must not finish the next transmission.
   hw.auto_complete = false;
   unsigned polls = 0;
   hw.dio.on_read = [&]() {

@@ -33,11 +33,22 @@ operations remain blocked until the complete configuration succeeds. Synchronous
 sends clear stale IRQ flags before starting TX. These rules carry forward the
 regressions from the earlier BUSY-fix proposal.
 
+Transmission temporarily invalidates readiness before changing mode or packet
+length. Every send exit attempts standby, IRQ clearing, the configured packet
+parameters and the configured RX/sleep mode, including failed preparation. Only
+complete restoration makes the radio ready again. If restoration fails, clearing
+BUSY alone is insufficient: operations remain blocked and the warning remains
+until an explicit configuration succeeds. Successful restoration or configuration
+re-enables the loop, so receiving can resume without another transmission.
+
 ## Verification
 
 The GPIO-backed fake chip exercises the real software SPI adapter and checks that
 NSS is asserted before BUSY is read, no bytes follow a rejected command, and NSS
 is released on all exits. Fault injection covers setup, TX, cleanup and RX.
+Recovery tests compare the restored packet parameters and deliver a subsequent
+received packet without another send. They also verify that failed restoration
+blocks mode changes and packet handling until configuration restores readiness.
 Compile-time checks ensure raw SPI methods are not publicly accessible.
 Host tests and embedded builds do not establish RF or physical-fault behavior.
 
