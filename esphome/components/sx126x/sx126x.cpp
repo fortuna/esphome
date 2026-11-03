@@ -36,7 +36,13 @@ void SX126x::configure() { this->configure_(); }
 bool SX126x::configure_() {
   if (this->is_failed())
     return false;
-  this->configured_ = false;
+  const bool configured = this->operation_.configure([this]() { return this->apply_configuration_(); });
+  if (configured)
+    this->enable_loop();
+  return configured;
+}
+
+bool SX126x::apply_configuration_() {
   if (!this->requested_profile_.sync_valid) {
     this->status_set_warning(LOG_STR("Invalid sync value"));
     return false;
@@ -55,8 +61,6 @@ bool SX126x::configure_() {
   if (!this->command_result_(result == ConfigurationResult::CONFIGURATION_RESULT_OK))
     return false;
   this->active_profile_ = this->requested_profile_;
-  this->configured_ = true;
-  this->enable_loop();
   return true;
 }
 
@@ -64,43 +68,47 @@ size_t SX126x::get_max_packet_size() { return this->active_profile_.max_packet_s
 
 SX126xError SX126x::transmit_packet(const uint8_t *data, size_t len) {
   // Callers such as a template number's on_value can run before setup() or after a failed setup
-  if (!this->is_ready() || !this->configured_) {
+  if (!this->is_ready()) {
     ESP_LOGW(TAG, "Radio not ready, packet dropped");
     return SX126xError::SX126X_ERROR_NOT_READY;
   }
+  const auto admission = this->operation_.transmit_admission();
+  if (admission != SX126xError::NONE)
+    return admission;
   if (this->active_profile_.payload_length > 0 && this->active_profile_.payload_length != len) {
     ESP_LOGE(TAG, "Packet size does not match config");
     return SX126xError::INVALID_PARAMS;
   }
-  if (len == 0 || len > this->get_max_packet_size()) {
+  if (data == nullptr || len == 0 || len > this->get_max_packet_size()) {
     ESP_LOGE(TAG, "Packet size out of range");
     return SX126xError::INVALID_PARAMS;
   }
 
-  // Preparation changes RX state and packet length. Readiness returns only after full restoration.
-  this->configured_ = false;
-  SX126xError ret = SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
-  const bool prepared =
-      this->commands_.standby(STDBY_XOSC) &&
-      (this->active_profile_.payload_length != 0 || this->commands_.set_packet_params(this->active_profile_, len)) &&
-      this->commands_.write_fifo(data, len) && this->commands_.clear_irqs() && this->commands_.transmit();
-  if (this->command_result_(prepared)) {
-    ret = SX126xError::NONE;
-    const uint32_t start = millis();
-    while (!this->dio1_pin_->digital_read()) {
-      App.feed_wdt();
-      if (millis() - start > TRANSMIT_TIMEOUT_MS) {
-        ESP_LOGE(TAG, "Transmit packet failure");
-        ret = SX126xError::TIMEOUT;
-        break;
-      }
+  const auto result = this->operation_.transmit(
+      [this, data, len]() { return this->command_result_(this->prepare_transmit_(data, len)); },
+      [this]() { return this->wait_for_transmit_(); },
+      [this]() { return this->command_result_(this->restore_after_transmit_()); });
+  if (this->operation_.is_ready())
+    this->enable_loop();
+  return result;
+}
+
+bool SX126x::prepare_transmit_(const uint8_t *data, size_t len) {
+  return this->commands_.standby(STDBY_XOSC) &&
+         (this->active_profile_.payload_length != 0 || this->commands_.set_packet_params(this->active_profile_, len)) &&
+         this->commands_.write_fifo(data, len) && this->commands_.clear_irqs() && this->commands_.transmit();
+}
+
+SX126xError SX126x::wait_for_transmit_() {
+  const uint32_t start = millis();
+  while (!this->dio1_pin_->digital_read()) {
+    App.feed_wdt();
+    if (millis() - start > TRANSMIT_TIMEOUT_MS) {
+      ESP_LOGE(TAG, "Transmit packet failure");
+      return SX126xError::TIMEOUT;
     }
   }
-  if (!this->command_result_(this->restore_after_transmit_()))
-    return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
-  this->configured_ = true;
-  this->enable_loop();
-  return ret;
+  return SX126xError::NONE;
 }
 
 bool SX126x::restore_after_transmit_() {
@@ -118,7 +126,7 @@ void SX126x::call_listeners_(const std::vector<uint8_t> &packet, float rssi, flo
 }
 
 void SX126x::loop() {
-  if (this->is_failed() || !this->configured_) {
+  if (this->is_failed() || !this->operation_.is_ready()) {
     return;
   }
   if (!this->dio1_pin_->digital_read()) {
