@@ -148,6 +148,7 @@ class SX126x final : public Component {
   bool write_register_(uint16_t reg, uint8_t *data, uint8_t size);
   bool read_register_(uint16_t reg, uint8_t *data, uint8_t size);
   void call_listeners_(const std::vector<uint8_t> &packet, float rssi, float snr);
+  bool restore_after_transmit_();
   bool configured_{false};
   bool command_result_(bool success);
   SpiCommandPort port_;

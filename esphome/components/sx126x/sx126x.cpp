@@ -295,6 +295,7 @@ bool SX126x::configure_() {
     }
   }
   this->configured_ = true;
+  this->enable_loop();
   return true;
 }
 
@@ -354,54 +355,38 @@ SX126xError SX126x::transmit_packet(const uint8_t *data, size_t len) {
     return SX126xError::INVALID_PARAMS;
   }
 
-  SX126xError ret = SX126xError::NONE;
-  if (!this->set_mode_standby_(STDBY_XOSC)) {
-    return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
-  }
-  if (this->payload_length_ == 0 && !this->set_packet_params_(len)) {
-    return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
-  }
-  if (!this->write_fifo_(0x00, data, len)) {
-    return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
-  }
+  // Preparation changes RX state and packet length. Readiness returns only after full restoration.
+  this->configured_ = false;
+  SX126xError ret = SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
   uint8_t clear[2] = {0xFF, 0xFF};
-  if (!this->write_opcode_(RADIO_CLR_IRQSTATUS, clear, 2)) {
-    return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
-  }
-  if (!this->set_mode_tx_()) {
-    return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
-  }
-
-  // wait until transmit completes, typically the delay will be less than 100 ms
-  uint32_t start = millis();
-  while (!this->dio1_pin_->digital_read()) {
-    App.feed_wdt();
-    if (millis() - start > TRANSMIT_TIMEOUT_MS) {
-      ESP_LOGE(TAG, "Transmit packet failure");
-      ret = SX126xError::TIMEOUT;
-      break;
+  if (this->set_mode_standby_(STDBY_XOSC) && (this->payload_length_ != 0 || this->set_packet_params_(len)) &&
+      this->write_fifo_(0x00, data, len) && this->write_opcode_(RADIO_CLR_IRQSTATUS, clear, 2) &&
+      this->set_mode_tx_()) {
+    ret = SX126xError::NONE;
+    // Wait until transmit completes, typically less than 100 ms.
+    const uint32_t start = millis();
+    while (!this->dio1_pin_->digital_read()) {
+      App.feed_wdt();
+      if (millis() - start > TRANSMIT_TIMEOUT_MS) {
+        ESP_LOGE(TAG, "Transmit packet failure");
+        ret = SX126xError::TIMEOUT;
+        break;
+      }
     }
   }
 
-  uint8_t buf[2];
-  buf[0] = 0xFF;
-  buf[1] = 0xFF;
-  if (!this->write_opcode_(RADIO_CLR_IRQSTATUS, buf, 2)) {
+  if (!this->restore_after_transmit_())
     return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
-  }
-  if (this->payload_length_ == 0 && !this->set_packet_params_(this->get_max_packet_size())) {
-    return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
-  }
-  if (this->rx_start_) {
-    if (!this->set_mode_rx_()) {
-      return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
-    }
-  } else {
-    if (!this->set_mode_sleep_()) {
-      return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
-    }
-  }
+  this->configured_ = true;
+  this->enable_loop();
   return ret;
+}
+
+bool SX126x::restore_after_transmit_() {
+  uint8_t clear[2] = {0xFF, 0xFF};
+  return this->set_mode_standby_(STDBY_XOSC) && this->write_opcode_(RADIO_CLR_IRQSTATUS, clear, 2) &&
+         (this->payload_length_ != 0 || this->set_packet_params_(this->get_max_packet_size())) &&
+         (this->rx_start_ ? this->set_mode_rx_() : this->set_mode_sleep_());
 }
 
 void SX126x::call_listeners_(const std::vector<uint8_t> &packet, float rssi, float snr) {
