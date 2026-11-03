@@ -417,3 +417,46 @@ static_assert(!RawSpiAccessible<SpiCommandPort>);
 static_assert(!ManualSelectionAccessible<SX126x>);
 static_assert(!ManualSelectionAccessible<SpiCommandPort>);
 }  // namespace esphome::sx126x::testing
+
+namespace esphome::sx126x::testing {
+TEST(SX126xProfile, SettersDoNotChangeAppliedPacketOrRestorationPolicy) {
+  RadioHardware hw;
+  hw.configure(true, true);
+  hw.radio.set_payload_length(2);
+  hw.radio.set_rx_start(false);
+  EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::NONE);
+  EXPECT_TRUE(hw.receiving);
+  hw.radio.configure();
+  EXPECT_EQ(hw.radio.get_max_packet_size(), 2u);
+  EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::INVALID_PARAMS);
+  EXPECT_EQ(hw.radio.transmit_packet(hw.packet.data(), 2), SX126xError::NONE);
+  EXPECT_FALSE(hw.receiving);
+}
+
+TEST(SX126xProfile, ColdSleepInvalidatesConfigurationAndWarmSleepRetainsIt) {
+  RadioHardware hw;
+  hw.configure(true, true);
+  hw.radio.set_mode_sleep(false);
+  EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::NONE);
+  hw.radio.set_mode_sleep(true);
+  hw.clear_trace();
+  EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::SX126X_ERROR_NOT_READY);
+  hw.radio.set_mode_rx();
+  EXPECT_TRUE(hw.transactions.empty());
+  hw.radio.configure();
+  EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::NONE);
+}
+
+TEST(SX126xProfile, RejectsOversizedSyncValueBeforeResetOrSpi) {
+  RadioHardware hw;
+  hw.configure(true, true);
+  hw.radio.set_sync_value(std::vector<uint8_t>(9, 1));
+  hw.clear_trace();
+  hw.radio.configure();
+  EXPECT_TRUE(hw.transactions.empty());
+  EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::SX126X_ERROR_NOT_READY);
+  hw.radio.set_sync_value({0x14, 0x24});
+  hw.radio.configure();
+  EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::NONE);
+}
+}  // namespace esphome::sx126x::testing
