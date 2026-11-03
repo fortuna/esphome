@@ -33,13 +33,27 @@ operations remain blocked until the complete configuration succeeds. Synchronous
 sends clear stale IRQ flags before starting TX. These rules carry forward the
 regressions from the earlier BUSY-fix proposal.
 
-Transmission temporarily invalidates readiness before changing mode or packet
-length. Every send exit attempts standby, IRQ clearing, the configured packet
-parameters and the configured RX/sleep mode, including failed preparation. Only
-complete restoration makes the radio ready again. If restoration fails, clearing
-BUSY alone is insufficient: operations remain blocked and the warning remains
-until an explicit configuration succeeds. Successful restoration or configuration
-re-enables the loop, so receiving can resume without another transmission.
+`RadioOperation` owns readiness and the complete operation lifecycle. The
+component supplies preparation, waiting and restoration functions to its
+`transmit()` runner. Those functions cannot set readiness, and an early return
+from preparation or waiting always returns control to the runner. A restoration
+function is a required argument, not a cleanup call that each error branch must
+remember. Only this owner can transition to Idle after successful restoration.
+
+Every send exit attempts standby, IRQ clearing, the configured packet parameters
+and RX/sleep mode. If restoration fails, clearing BUSY alone is insufficient:
+operations remain blocked until explicit configuration succeeds. Configuration
+and mode changes use the same owner; reentry during preparation, waiting,
+restoration or configuration is rejected. Failed mode changes require
+reconfiguration, as does successful cold sleep. Warm sleep retains configuration.
+
+The owner's private scope guard is a fallback for unexpected exits within the
+owner itself: it leaves readiness invalid. It performs no SPI or recovery work
+in its destructor. Fallible restoration stays explicit in the runner and its
+failure takes precedence over the transmit result. The callbacks are templates,
+run synchronously, and are never stored; there is no allocation or new thread.
+The ESPHome adapter re-enables its loop after successful restoration/configuration,
+so reception can resume without another transmission.
 
 ## Verification
 
@@ -50,6 +64,9 @@ Recovery tests compare the restored packet parameters and deliver a subsequent
 received packet without another send. They also verify that failed restoration
 blocks mode changes and packet handling until configuration restores readiness.
 Compile-time checks ensure raw SPI methods are not publicly accessible.
+Operation tests also verify early returns, reentry rejection and that a send
+cannot be invoked without a restoration function. The owner cannot be copied,
+so its readiness cannot be duplicated independently of the physical radio.
 Host tests and embedded builds do not establish RF or physical-fault behavior.
 
 ## Radio vocabulary and applied configuration
@@ -73,16 +90,23 @@ lifecycle policy, and lifecycle tests to assert that incomplete configuration
 never permits normal operations. Existing YAML and send/mode entry points remain
 available; runtime setters now explicitly stage changes until configure succeeds.
 
-## One transmit operation engine
+## Async continuation of the same operation lifecycle
+
+Async support extends the `RadioOperation` owner already used by the synchronous
+driver. `start_transmit()` either restores a failed preparation or retains
+ownership through packet airtime. `finish_transmit()` uses the same restoration
+path and rejects duplicate completion. The synchronous runner also uses these
+two methods. There is no second readiness flag or component-owned state machine.
 
 Both send APIs use the same admission, command preparation, IRQ interpretation,
 deadline and restoration functions. The blocking API supplies a stack completion
 listener and polls the engine while feeding the watchdog. The async API returns
 after preparation; loop() polls it. No thread, queue or per-send allocation is
-introduced. State is owned by one component instance:
+introduced. Each component has one `RadioOperation`, whose state is private:
 
 ```text
 Unconfigured -> Configuring -> Idle
+Idle -> ChangingMode -> Idle (or Unconfigured after cold sleep)
 Idle -> PreparingTx -> Transmitting -> Restoring -> Idle
            failure -> Restoring -> RecoveryRequired (if restoration fails)
 RecoveryRequired -> Configuring -> Idle
@@ -90,8 +114,11 @@ RecoveryRequired -> Configuring -> Idle
 
 Configuration errors return to Unconfigured. Initial setup may also mark the
 ESPHome component failed. Preparing and Restoring are real ownership states;
-public mode/configuration requests cannot interrupt them. One TxOperation stores
-the listener and deadline. Failed admission owes no completion. Accepted sends
+public mode/configuration requests cannot interrupt them. Failed mode changes
+also enter RecoveryRequired. Idle means available for a driver-managed operation,
+not the physical chip's mode: the radio may be receiving or sleeping.
+One TxOperation stores only the listener and deadline, not lifecycle state.
+Failed admission owes no completion. Accepted sends
 complete once, after attempted restoration and ownership release. A callback can
 start another send only if the state returned to Idle. RecoveryRequired rejects
 sends until an explicit configure succeeds: a failed standby/cleanup cannot be
@@ -123,7 +150,8 @@ existing automation value-copy behavior is unchanged.
 
 - Add byte framing only in Sx126xCommands, using the complete exchange API.
 - Keep GPIO/SPI selection and BUSY timing exclusively in SpiCommandPort.
-- Put lifecycle and state transitions in SX126x; return errors before advancing.
+- Put admission, readiness and state transitions in RadioOperation. SX126x owns
+  ESPHome scheduling, warnings and callbacks; command functions report results.
 - Do not add callback dispatch to admission, preparation or restoration.
 - Do not hide fallible radio restoration in a destructor. Destructors release
   selection/borrowing scopes; explicit restoration reports its hardware result.

@@ -31,7 +31,7 @@ void SX126x::setup() {
 }
 
 void SX126x::configure() {
-  if (this->is_transmitting() || this->rx_dispatching_) {
+  if (this->operation_.is_active() || this->rx_dispatching_) {
     ESP_LOGW(TAG, "Radio operation in progress, configuration ignored");
     return;
   }
@@ -39,26 +39,28 @@ void SX126x::configure() {
 }
 
 bool SX126x::can_change_mode_() {
-  if (this->state_ == RadioState::RADIO_STATE_IDLE && !this->rx_dispatching_)
+  if (this->operation_.is_ready() && !this->rx_dispatching_)
     return true;
   ESP_LOGW(TAG, "Radio unavailable, mode change ignored");
   return false;
 }
 
-bool SX126x::is_transmitting() const {
-  return this->state_ == RadioState::RADIO_STATE_PREPARING_TX || this->state_ == RadioState::RADIO_STATE_TRANSMITTING ||
-         this->state_ == RadioState::RADIO_STATE_RESTORING;
-}
+bool SX126x::is_transmitting() const { return this->operation_.is_transmitting(); }
 
 bool SX126x::configure_() {
   if (this->is_failed())
     return false;
-  this->state_ = RadioState::RADIO_STATE_UNCONFIGURED;
+  const bool configured = this->operation_.configure([this]() { return this->apply_configuration_(); });
+  if (configured)
+    this->enable_loop();
+  return configured;
+}
+
+bool SX126x::apply_configuration_() {
   if (!this->requested_profile_.sync_valid) {
     this->status_set_warning(LOG_STR("Invalid sync value"));
     return false;
   }
-  this->state_ = RadioState::RADIO_STATE_CONFIGURING;
   this->rst_pin_->digital_write(true);
   delayMicroseconds(RESET_DELAY_HIGH_US);
   this->rst_pin_->digital_write(false);
@@ -66,7 +68,6 @@ bool SX126x::configure_() {
   this->rst_pin_->digital_write(true);
   delayMicroseconds(RESET_DELAY_HIGH_US);
   const auto result = this->commands_.configure(this->requested_profile_, this->version_);
-  this->state_ = RadioState::RADIO_STATE_UNCONFIGURED;
   if (result == ConfigurationResult::CONFIGURATION_RESULT_UNSUPPORTED) {
     this->status_set_warning(LOG_STR("Unsupported chip version"));
     return false;
@@ -74,8 +75,6 @@ bool SX126x::configure_() {
   if (!this->command_result_(result == ConfigurationResult::CONFIGURATION_RESULT_OK))
     return false;
   this->active_profile_ = this->requested_profile_;
-  this->state_ = RadioState::RADIO_STATE_IDLE;
-  this->enable_loop();
   return true;
 }
 
@@ -103,11 +102,11 @@ SX126xError SX126x::transmit_packet(const uint8_t *data, size_t len) {
 
 SX126xError SX126x::start_transmit_async(SX126xTransmitListener *listener, const uint8_t *data, size_t len,
                                          uint32_t timeout_ms) {
-  if (!this->is_ready() || this->state_ == RadioState::RADIO_STATE_UNCONFIGURED ||
-      this->state_ == RadioState::RADIO_STATE_RECOVERY_REQUIRED)
+  if (!this->is_ready())
     return SX126xError::SX126X_ERROR_NOT_READY;
-  if (this->state_ != RadioState::RADIO_STATE_IDLE)
-    return SX126xError::SX126X_ERROR_BUSY;
+  const auto admission = this->operation_.transmit_admission();
+  if (admission != SX126xError::NONE)
+    return admission;
   if (listener == nullptr || data == nullptr || len == 0 || len > this->get_max_packet_size() ||
       (this->active_profile_.payload_length > 0 && len != this->active_profile_.payload_length) || timeout_ms == 0 ||
       timeout_ms > 262143)
@@ -123,26 +122,25 @@ SX126xError SX126x::start_transmit_async(SX126xTransmitListener *listener, const
       return SX126xError::SX126X_ERROR_BUSY;
     }
   }
-  this->state_ = RadioState::RADIO_STATE_PREPARING_TX;
   this->tx_ = {listener, 0, timeout_ms};
-  const bool prepared =
-      this->commands_.standby(STDBY_XOSC) && this->commands_.clear_irqs() &&
-      (this->active_profile_.payload_length != 0 || this->commands_.set_packet_params(this->active_profile_, len)) &&
-      this->commands_.write_fifo(data, len) && this->commands_.transmit(timeout_ms);
-  if (!this->command_result_(prepared)) {
-    // A failed start owes no callback, but may have changed the chip's mode.
-    this->state_ = RadioState::RADIO_STATE_RESTORING;
-    const bool restored = this->command_result_(this->restore_after_transmit_());
-    this->state_ = restored ? RadioState::RADIO_STATE_IDLE : RadioState::RADIO_STATE_RECOVERY_REQUIRED;
+  const auto result = this->operation_.start_transmit(
+      [this, data, len, timeout_ms]() { return this->command_result_(this->prepare_transmit_(data, len, timeout_ms)); },
+      [this]() { return this->command_result_(this->restore_after_transmit_()); });
+  if (result != SX126xError::NONE) {
     this->tx_ = {};
-    if (restored)
+    if (this->operation_.is_ready())
       this->enable_loop();
-    return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
+    return result;
   }
   this->tx_.started_ms = millis();
-  this->state_ = RadioState::RADIO_STATE_TRANSMITTING;
   this->enable_loop();
   return SX126xError::NONE;
+}
+
+bool SX126x::prepare_transmit_(const uint8_t *data, size_t len, uint32_t timeout_ms) {
+  return this->commands_.standby(STDBY_XOSC) && this->commands_.clear_irqs() &&
+         (this->active_profile_.payload_length != 0 || this->commands_.set_packet_params(this->active_profile_, len)) &&
+         this->commands_.write_fifo(data, len) && this->commands_.transmit(timeout_ms);
 }
 
 bool SX126x::restore_after_transmit_() {
@@ -153,27 +151,24 @@ bool SX126x::restore_after_transmit_() {
 }
 
 void SX126x::finish_transmit_(SX126xError result) {
-  if (this->state_ != RadioState::RADIO_STATE_TRANSMITTING)
+  if (!this->operation_.is_waiting_for_transmit())
     return;
-  this->state_ = RadioState::RADIO_STATE_RESTORING;
-  const bool restored = this->command_result_(this->restore_after_transmit_());
-  if (!restored)
-    result = SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
+  result = this->operation_.finish_transmit(
+      result, [this]() { return this->command_result_(this->restore_after_transmit_()); });
   auto *listener = this->tx_.listener;
   this->tx_ = {};
-  this->state_ = restored ? RadioState::RADIO_STATE_IDLE : RadioState::RADIO_STATE_RECOVERY_REQUIRED;
   listener->on_transmit_complete(result);
 }
 
 bool SX126x::cancel_transmit_async(SX126xTransmitListener *listener) {
-  if (this->state_ != RadioState::RADIO_STATE_TRANSMITTING || listener == nullptr || listener != this->tx_.listener)
+  if (!this->operation_.is_waiting_for_transmit() || listener == nullptr || listener != this->tx_.listener)
     return false;
   this->finish_transmit_(SX126xError::SX126X_ERROR_CANCELLED);
   return true;
 }
 
 void SX126x::poll_transmit_(uint32_t now) {
-  if (this->state_ != RadioState::RADIO_STATE_TRANSMITTING)
+  if (!this->operation_.is_waiting_for_transmit())
     return;
   if (this->dio1_pin_->digital_read()) {
     uint16_t status;
@@ -203,11 +198,11 @@ void SX126x::call_listeners_(const std::vector<uint8_t> &packet, float rssi, flo
 void SX126x::loop() {
   if (this->rx_dispatching_ || this->is_failed())
     return;
-  if (this->state_ == RadioState::RADIO_STATE_TRANSMITTING) {
+  if (this->operation_.is_waiting_for_transmit()) {
     this->poll_transmit_(App.get_loop_component_start_time());
     return;
   }
-  if (this->state_ != RadioState::RADIO_STATE_IDLE)
+  if (!this->operation_.is_ready())
     return;
   if (!this->dio1_pin_->digital_read()) {
     if (this->dio1_pin_->is_internal()) {
