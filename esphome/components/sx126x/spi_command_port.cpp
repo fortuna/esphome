@@ -11,21 +11,26 @@ bool SpiCommandPort::exchange_(std::span<const uint8_t> header, std::span<const 
   Selection selected(this->device_);
   const uint32_t start = millis();
   while (this->busy_pin_->digital_read()) {
-    if (millis() - start > BUSY_TIMEOUT_MS)
+    if (millis() - start > BUSY_TIMEOUT_MS) {
       return false;
+    }
   }
-  for (auto byte : header)
+  for (auto byte : header) {
     this->device_.transfer_byte(byte);
-  for (auto byte : tx)
+  }
+  for (auto byte : tx) {
     this->device_.transfer_byte(byte);
-  for (auto &byte : rx)
+  }
+  for (auto &byte : rx) {
     byte = this->device_.transfer_byte(0);
+  }
   return true;
 }
 
 bool SpiCommandPort::write(std::span<const uint8_t> header, std::span<const uint8_t> data) {
-  if (!this->exchange_(header, data, {}))
+  if (!this->exchange_(header, data, {})) {
     return false;
+  }
   // This delay belongs after CS is released, not in the selected interval.
   delayMicroseconds(SWITCHING_DELAY_US);
   return true;

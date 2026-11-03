@@ -74,8 +74,9 @@ struct RadioProfile {
   bool sync_valid{true};
   void set_sync_value(std::span<const uint8_t> bytes) {
     this->sync_valid = bytes.size() <= this->sync_value.size();
-    if (!this->sync_valid)
+    if (!this->sync_valid) {
       return;
+    }
     std::copy(bytes.begin(), bytes.end(), this->sync_value.begin());
     this->sync_size = bytes.size();
   }

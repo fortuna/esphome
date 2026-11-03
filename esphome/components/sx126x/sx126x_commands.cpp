@@ -388,20 +388,23 @@ bool Sx126xCommands::clear_irqs(uint16_t mask) {
 }
 bool Sx126xCommands::read_irq(uint16_t &status) {
   uint8_t data[2];
-  if (!this->read_opcode_(RADIO_GET_IRQSTATUS, data, 2))
+  if (!this->read_opcode_(RADIO_GET_IRQSTATUS, data, 2)) {
     return false;
+  }
   status = (uint16_t(data[0]) << 8) | data[1];
   return true;
 }
 bool Sx126xCommands::write_fifo(const uint8_t *data, size_t size) { return this->write_fifo_(0, data, size); }
 bool Sx126xCommands::read_packet(const RadioProfile &profile, std::vector<uint8_t> &packet, float &rssi, float &snr) {
   uint8_t data[3];
-  if (!this->read_opcode_(RADIO_GET_PACKETSTATUS, data, 3))
+  if (!this->read_opcode_(RADIO_GET_PACKETSTATUS, data, 3)) {
     return false;
+  }
   rssi = (profile.modulation == PACKET_TYPE_LORA ? data[0] : data[2]) / -2.0f;
   snr = profile.modulation == PACKET_TYPE_LORA ? static_cast<int8_t>(data[1]) / 4.0f : 0;
-  if (!this->read_opcode_(RADIO_GET_RXBUFFERSTATUS, data, 2))
+  if (!this->read_opcode_(RADIO_GET_RXBUFFERSTATUS, data, 2)) {
     return false;
+  }
   packet.resize(data[0]);
   return this->read_fifo_(data[1], packet);
 }

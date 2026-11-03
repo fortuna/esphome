@@ -105,8 +105,9 @@ class SX126x final : public Component {
   bool prepare_transmit_(const uint8_t *data, size_t len);
   SX126xError wait_for_transmit_();
   template<typename Command> void change_mode_(Command &&command, bool retains_configuration = true) {
-    if (this->operation_.change_mode(command, retains_configuration))
+    if (this->operation_.change_mode(command, retains_configuration)) {
       this->enable_loop();
+    }
   }
   bool command_result_(bool success);
   SpiCommandPort port_;

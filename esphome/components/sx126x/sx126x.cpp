@@ -34,11 +34,13 @@ void SX126x::setup() {
 void SX126x::configure() { this->configure_(); }
 
 bool SX126x::configure_() {
-  if (this->is_failed())
+  if (this->is_failed()) {
     return false;
+  }
   const bool configured = this->operation_.configure([this]() { return this->apply_configuration_(); });
-  if (configured)
+  if (configured) {
     this->enable_loop();
+  }
   return configured;
 }
 
@@ -58,8 +60,9 @@ bool SX126x::apply_configuration_() {
     this->mark_failed(LOG_STR("Unsupported chip version"));
     return false;
   }
-  if (!this->command_result_(result == ConfigurationResult::CONFIGURATION_RESULT_OK))
+  if (!this->command_result_(result == ConfigurationResult::CONFIGURATION_RESULT_OK)) {
     return false;
+  }
   this->active_profile_ = this->requested_profile_;
   return true;
 }
@@ -73,8 +76,9 @@ SX126xError SX126x::transmit_packet(const uint8_t *data, size_t len) {
     return SX126xError::SX126X_ERROR_NOT_READY;
   }
   const auto admission = this->operation_.transmit_admission();
-  if (admission != SX126xError::NONE)
+  if (admission != SX126xError::NONE) {
     return admission;
+  }
   if (this->active_profile_.payload_length > 0 && this->active_profile_.payload_length != len) {
     ESP_LOGE(TAG, "Packet size does not match config");
     return SX126xError::INVALID_PARAMS;
@@ -88,8 +92,9 @@ SX126xError SX126x::transmit_packet(const uint8_t *data, size_t len) {
       [this, data, len]() { return this->command_result_(this->prepare_transmit_(data, len)); },
       [this]() { return this->wait_for_transmit_(); },
       [this]() { return this->command_result_(this->restore_after_transmit_()); });
-  if (this->operation_.is_ready())
+  if (this->operation_.is_ready()) {
     this->enable_loop();
+  }
   return result;
 }
 
@@ -138,12 +143,14 @@ void SX126x::loop() {
 
   uint16_t status;
   if (!this->command_result_(this->commands_.read_irq(status)) ||
-      !this->command_result_(this->commands_.clear_irqs(status)))
+      !this->command_result_(this->commands_.clear_irqs(status))) {
     return;
+  }
   if ((status & IRQ_RX_DONE) && !(status & IRQ_CRC_ERROR)) {
     float rssi, snr;
-    if (this->command_result_(this->commands_.read_packet(this->active_profile_, this->packet_, rssi, snr)))
+    if (this->command_result_(this->commands_.read_packet(this->active_profile_, this->packet_, rssi, snr))) {
       this->call_listeners_(this->packet_, rssi, snr);
+    }
   }
 }
 
