@@ -1,4 +1,4 @@
-# SX126x command transport
+# SX126x implementation
 
 This note describes implementation boundaries for driver maintainers. User-facing
 configuration belongs in esphome.io; C++ borrowing and completion contracts belong
@@ -61,3 +61,65 @@ The separation allows configuration encoders to be tested without ESPHome
 lifecycle policy, and lifecycle tests to assert that incomplete configuration
 never permits normal operations. Existing YAML and send/mode entry points remain
 available; runtime setters now explicitly stage changes until configure succeeds.
+
+## One transmit operation engine
+
+Both send APIs use the same admission, command preparation, IRQ interpretation,
+deadline and restoration functions. The blocking API supplies a stack completion
+listener and polls the engine while feeding the watchdog. The async API returns
+after preparation; loop() polls it. No thread, queue or per-send allocation is
+introduced. State is owned by one component instance:
+
+```text
+Unconfigured -> Configuring -> Idle
+Idle -> PreparingTx -> Transmitting -> Restoring -> Idle
+           failure -> Restoring -> RecoveryRequired (if restoration fails)
+RecoveryRequired -> Configuring -> Idle
+```
+
+Configuration errors return to Unconfigured. Initial setup may also mark the
+ESPHome component failed. Preparing and Restoring are real ownership states;
+public mode/configuration requests cannot interrupt them. One TxOperation stores
+the listener and deadline. Failed admission owes no completion. Accepted sends
+complete once, after attempted restoration and ownership release. A callback can
+start another send only if the state returned to Idle. RecoveryRequired rejects
+sends until an explicit configure succeeds: a failed standby/cleanup cannot be
+reported as recovered hardware. Cold sleep also requires configure before reuse.
+
+TX-done means success; the radio timeout bit takes precedence if both are set.
+Unrelated IRQs never imply success. The software deadline is checked at loop
+cadence even when DIO1 never signals. SPI and BUSY waits remain bounded synchronous
+work. Cancellation is synchronous in its caller; ordinary async completion occurs
+in loop(), never in the ISR. The header documents listener and payload lifetimes.
+
+## Receive borrowing without recursive dispatch
+
+Only loop() reads packets and invokes receive listeners. Admission may inspect IRQ
+status, but never reads a packet, acknowledges pending RX, or invokes user code.
+Pending RX causes BUSY and keeps the loop enabled, letting the application retry
+after delivery. This also applies to the blocking API. Stale TX IRQs do not block
+admission and are cleared during preparation.
+
+A scoped RxDelivery guard prevents recursive loop calls while listeners and
+on_packet automations borrow the packet. A callback may send an echo if no other
+RX is pending; this copies the payload into the chip FIFO without mutating the
+borrowed buffer. Mode/configuration calls during delivery are rejected. The one
+reusable RX vector reserves 255 bytes during setup, avoiding later growth in the
+driver. Listeners must not retain a borrowed reference after callback return;
+existing automation value-copy behavior is unchanged.
+
+## Reading and extending the implementation
+
+- Add byte framing only in Sx126xCommands, using the complete exchange API.
+- Keep GPIO/SPI selection and BUSY timing exclusively in SpiCommandPort.
+- Put lifecycle and state transitions in SX126x; return errors before advancing.
+- Do not add callback dispatch to admission, preparation or restoration.
+- Do not hide fallible radio restoration in a destructor. Destructors release
+  selection/borrowing scopes; explicit restoration reports its hardware result.
+- Test new commands through the GPIO-backed fake chip, including every failure
+  boundary. Test both send entry points when changing operation behavior.
+
+Compared with the earlier review drafts, ownership is per operation rather than
+an implicit combination of listener pointers and booleans. Uncertain restoration
+requires reconfiguration, and pending RX is deferred rather than dispatched from
+inside a send. These are intentional contracts, not hardware validation claims.

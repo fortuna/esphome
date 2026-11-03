@@ -9,6 +9,9 @@ namespace esphome::sx126x {
 // this object. Call only from the main loop; spans are borrowed until return.
 class SpiCommandPort {
  public:
+  SpiCommandPort() = default;
+  SpiCommandPort(const SpiCommandPort &) = delete;
+  SpiCommandPort &operator=(const SpiCommandPort &) = delete;
   void set_spi_parent(spi::SPIComponent *parent) { this->device_.set_spi_parent(parent); }
   void set_cs_pin(GPIOPin *pin) { this->device_.set_cs_pin(pin); }
   void set_data_rate(uint32_t rate) { this->device_.set_data_rate(rate); }
