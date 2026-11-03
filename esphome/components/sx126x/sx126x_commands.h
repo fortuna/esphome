@@ -1,6 +1,6 @@
 #pragma once
 #include "radio_profile.h"
-#include "spi_command_port.h"
+#include "sx126x_spi_device.h"
 #include <vector>
 
 namespace esphome::sx126x {
@@ -16,7 +16,7 @@ class Sx126xCommands {
  public:
   Sx126xCommands(const Sx126xCommands &) = delete;
   Sx126xCommands &operator=(const Sx126xCommands &) = delete;
-  explicit Sx126xCommands(SpiCommandPort &port) : port_(port) {}
+  explicit Sx126xCommands(Sx126xSpiDevice &spi_device) : spi_device_(spi_device) {}
   [[nodiscard]] ConfigurationResult configure(const RadioProfile &profile, std::span<char, 16> version);
   [[nodiscard]] bool set_packet_params(const RadioProfile &profile, uint8_t length);
   [[nodiscard]] bool calibrate_image(uint32_t frequency);
@@ -38,6 +38,6 @@ class Sx126xCommands {
   [[nodiscard]] bool write_opcode_(uint8_t opcode, const uint8_t *data, uint8_t size);
   [[nodiscard]] bool read_register_(uint16_t reg, uint8_t *data, uint8_t size);
   [[nodiscard]] bool write_register_(uint16_t reg, const uint8_t *data, uint8_t size);
-  SpiCommandPort &port_;
+  Sx126xSpiDevice &spi_device_;
 };
 }  // namespace esphome::sx126x

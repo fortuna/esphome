@@ -22,7 +22,7 @@ void SX126x::setup() {
   }
 
   // start spi
-  this->port_.setup();
+  this->spi_device_.setup();
 
   // configure rf
   if (!this->configure_() && !this->is_failed()) {

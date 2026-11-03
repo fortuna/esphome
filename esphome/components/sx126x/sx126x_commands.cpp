@@ -25,31 +25,31 @@ static constexpr float LOW_DATA_RATE_OPTIMIZE_THRESHOLD = 16.38f;  // 16.38 ms
 
 bool Sx126xCommands::read_fifo_(uint8_t offset, std::vector<uint8_t> &packet) {
   const uint8_t header[] = {RADIO_READ_BUFFER, offset, 0};
-  return this->port_.read(header, packet);
+  return this->spi_device_.read(header, packet);
 }
 
 bool Sx126xCommands::write_fifo_(uint8_t offset, const uint8_t *data, size_t len) {
   const uint8_t header[] = {RADIO_WRITE_BUFFER, offset};
-  return this->port_.write(header, {data, len});
+  return this->spi_device_.write(header, {data, len});
 }
 
 bool Sx126xCommands::read_opcode_(uint8_t opcode, uint8_t *data, uint8_t size) {
   const uint8_t header[] = {opcode, 0};
-  return this->port_.read(header, {data, size});
+  return this->spi_device_.read(header, {data, size});
 }
 
 bool Sx126xCommands::write_opcode_(uint8_t opcode, const uint8_t *data, uint8_t size) {
-  return this->port_.write({&opcode, 1}, {data, size});
+  return this->spi_device_.write({&opcode, 1}, {data, size});
 }
 
 bool Sx126xCommands::read_register_(uint16_t reg, uint8_t *data, uint8_t size) {
   const uint8_t header[] = {RADIO_READ_REGISTER, static_cast<uint8_t>(reg >> 8), static_cast<uint8_t>(reg), 0};
-  return this->port_.read(header, {data, size});
+  return this->spi_device_.read(header, {data, size});
 }
 
 bool Sx126xCommands::write_register_(uint16_t reg, const uint8_t *data, uint8_t size) {
   const uint8_t header[] = {RADIO_WRITE_REGISTER, static_cast<uint8_t>(reg >> 8), static_cast<uint8_t>(reg)};
-  return this->port_.write(header, {data, size});
+  return this->spi_device_.write(header, {data, size});
 }
 
 ConfigurationResult Sx126xCommands::configure(const RadioProfile &profile, std::span<char, 16> version) {

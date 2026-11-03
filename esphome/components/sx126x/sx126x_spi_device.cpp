@@ -1,4 +1,4 @@
-#include "spi_command_port.h"
+#include "sx126x_spi_device.h"
 #include "esphome/core/hal.h"
 
 namespace esphome::sx126x {
@@ -6,7 +6,7 @@ namespace esphome::sx126x {
 static constexpr uint32_t BUSY_TIMEOUT_MS = 20;
 static constexpr uint32_t SWITCHING_DELAY_US = 1;
 
-bool SpiCommandPort::exchange_(std::span<const uint8_t> header, std::span<const uint8_t> tx, std::span<uint8_t> rx) {
+bool Sx126xSpiDevice::exchange_(std::span<const uint8_t> header, std::span<const uint8_t> tx, std::span<uint8_t> rx) {
   // Selecting first wakes a sleeping radio. The guard releases CS even on timeout.
   Selection selected(this->device_);
   const uint32_t start = millis();
@@ -27,7 +27,7 @@ bool SpiCommandPort::exchange_(std::span<const uint8_t> header, std::span<const 
   return true;
 }
 
-bool SpiCommandPort::write(std::span<const uint8_t> header, std::span<const uint8_t> data) {
+bool Sx126xSpiDevice::write(std::span<const uint8_t> header, std::span<const uint8_t> data) {
   if (!this->exchange_(header, data, {})) {
     return false;
   }
@@ -36,7 +36,7 @@ bool SpiCommandPort::write(std::span<const uint8_t> header, std::span<const uint
   return true;
 }
 
-bool SpiCommandPort::read(std::span<const uint8_t> header, std::span<uint8_t> data) {
+bool Sx126xSpiDevice::read(std::span<const uint8_t> header, std::span<uint8_t> data) {
   return this->exchange_(header, {}, data);
 }
 
