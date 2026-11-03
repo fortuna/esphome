@@ -98,8 +98,9 @@ TEST_P(SX126xBusyTransmit, RestoresEveryPreparationFailureWithoutAnotherTransmis
     const auto sends = hw.sends;
     hw.clear_trace();
     if (rx) {
-      if (!fixed)
+      if (!fixed) {
         hw.packet.resize(9, 0x55);  // RX must accept a different length than the attempted TX.
+      }
       hw.irq = IRQ_RX_DONE;
       hw.radio.loop();
       ASSERT_EQ(listener.packets.size(), 1u);
@@ -118,8 +119,9 @@ TEST_P(SX126xBusyTransmit, FailedRestorationRequiresConfigureBeforeReceiveRecove
   size_t restoration = 0;
   bool sent = false;
   for (size_t i = 0; i < reference.transactions.size(); i++) {
-    if (reference.transactions[i][0] == RADIO_SET_TX)
+    if (reference.transactions[i][0] == RADIO_SET_TX) {
       sent = true;
+    }
     if (sent && reference.transactions[i][0] == RADIO_SET_STANDBY) {
       restoration = i + 1;
       break;
@@ -327,8 +329,9 @@ TEST(SX126xBusy, RetryClearsStaleTxDoneBeforeWaitingForDelayedCompletion) {
   size_t cleanup = 0;
   bool sent = false;
   for (size_t i = 0; i < reference.transactions.size(); i++) {
-    if (reference.transactions[i][0] == RADIO_SET_TX)
+    if (reference.transactions[i][0] == RADIO_SET_TX) {
       sent = true;
+    }
     if (sent && reference.transactions[i][0] == RADIO_CLR_IRQSTATUS) {
       cleanup = i + 1;
       break;
@@ -346,8 +349,9 @@ TEST(SX126xBusy, RetryClearsStaleTxDoneBeforeWaitingForDelayedCompletion) {
   hw.auto_complete = false;
   unsigned polls = 0;
   hw.dio.on_read = [&]() {
-    if (++polls == 5)
+    if (++polls == 5) {
       hw.irq |= IRQ_TX_DONE;
+    }
     return hw.irq != 0;
   };
   EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::NONE);
@@ -400,8 +404,9 @@ TEST(SX126xBusy, ConfigurationCannotReenterSendPreparationOrRestoration) {
   unsigned guarded = 0;
   hw.cs.on_write = [&](bool high) {
     write(high);
-    if (!high || hw.transactions.back().empty() || hw.transactions.back()[0] != RADIO_SET_STANDBY)
+    if (!high || hw.transactions.back().empty() || hw.transactions.back()[0] != RADIO_SET_STANDBY) {
       return;
+    }
     guarded++;
     const auto commands = hw.transactions.size();
     hw.radio.configure();

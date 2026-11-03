@@ -205,8 +205,9 @@ TEST(RadioOperation, AsyncStartAndCompletionFailuresBothRequireRestoration) {
     };
     const auto result = operation.start_transmit([&]() { return prepared; }, restore);
     EXPECT_EQ(result, prepared ? SX126xError::NONE : SX126xError::SX126X_ERROR_BUSY_TIMEOUT);
-    if (prepared)
+    if (prepared) {
       EXPECT_EQ(operation.finish_transmit(SX126xError::NONE, restore), SX126xError::SX126X_ERROR_BUSY_TIMEOUT);
+    }
     EXPECT_EQ(restored, 1u);
     EXPECT_FALSE(operation.is_ready());
     EXPECT_FALSE(operation.is_active());

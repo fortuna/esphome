@@ -39,8 +39,9 @@ void SX126x::configure() {
 }
 
 bool SX126x::can_change_mode_() {
-  if (this->operation_.is_ready() && !this->rx_dispatching_)
+  if (this->operation_.is_ready() && !this->rx_dispatching_) {
     return true;
+  }
   ESP_LOGW(TAG, "Radio unavailable, mode change ignored");
   return false;
 }
@@ -48,11 +49,13 @@ bool SX126x::can_change_mode_() {
 bool SX126x::is_transmitting() const { return this->operation_.is_transmitting(); }
 
 bool SX126x::configure_() {
-  if (this->is_failed())
+  if (this->is_failed()) {
     return false;
+  }
   const bool configured = this->operation_.configure([this]() { return this->apply_configuration_(); });
-  if (configured)
+  if (configured) {
     this->enable_loop();
+  }
   return configured;
 }
 
@@ -72,8 +75,9 @@ bool SX126x::apply_configuration_() {
     this->status_set_warning(LOG_STR("Unsupported chip version"));
     return false;
   }
-  if (!this->command_result_(result == ConfigurationResult::CONFIGURATION_RESULT_OK))
+  if (!this->command_result_(result == ConfigurationResult::CONFIGURATION_RESULT_OK)) {
     return false;
+  }
   this->active_profile_ = this->requested_profile_;
   return true;
 }
@@ -91,8 +95,9 @@ SX126xError SX126x::transmit_packet(const uint8_t *data, size_t len) {
     bool done{false};
   } completion;
   const auto admitted = this->start_transmit_async(&completion, data, len, TRANSMIT_TIMEOUT_MS);
-  if (admitted != SX126xError::NONE)
+  if (admitted != SX126xError::NONE) {
     return admitted;
+  }
   while (!completion.done) {
     App.feed_wdt();
     this->poll_transmit_(millis());
@@ -102,21 +107,25 @@ SX126xError SX126x::transmit_packet(const uint8_t *data, size_t len) {
 
 SX126xError SX126x::start_transmit_async(SX126xTransmitListener *listener, const uint8_t *data, size_t len,
                                          uint32_t timeout_ms) {
-  if (!this->is_ready())
+  if (!this->is_ready()) {
     return SX126xError::SX126X_ERROR_NOT_READY;
+  }
   const auto admission = this->operation_.transmit_admission();
-  if (admission != SX126xError::NONE)
+  if (admission != SX126xError::NONE) {
     return admission;
+  }
   if (listener == nullptr || data == nullptr || len == 0 || len > this->get_max_packet_size() ||
       (this->active_profile_.payload_length > 0 && len != this->active_profile_.payload_length) || timeout_ms == 0 ||
-      timeout_ms > 262143)
+      timeout_ms > 262143) {
     return SX126xError::INVALID_PARAMS;
+  }
 
   // Admission never reads a packet or invokes a callback: borrowed RX data stays stable.
   if (this->dio1_pin_->digital_read()) {
     uint16_t status;
-    if (!this->command_result_(this->commands_.read_irq(status)))
+    if (!this->command_result_(this->commands_.read_irq(status))) {
       return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
+    }
     if (status & IRQ_RX_DONE) {
       this->enable_loop();
       return SX126xError::SX126X_ERROR_BUSY;
@@ -128,8 +137,9 @@ SX126xError SX126x::start_transmit_async(SX126xTransmitListener *listener, const
       [this]() { return this->command_result_(this->restore_after_transmit_()); });
   if (result != SX126xError::NONE) {
     this->tx_ = {};
-    if (this->operation_.is_ready())
+    if (this->operation_.is_ready()) {
       this->enable_loop();
+    }
     return result;
   }
   this->tx_.started_ms = millis();
@@ -151,8 +161,9 @@ bool SX126x::restore_after_transmit_() {
 }
 
 void SX126x::finish_transmit_(SX126xError result) {
-  if (!this->operation_.is_waiting_for_transmit())
+  if (!this->operation_.is_waiting_for_transmit()) {
     return;
+  }
   result = this->operation_.finish_transmit(
       result, [this]() { return this->command_result_(this->restore_after_transmit_()); });
   auto *listener = this->tx_.listener;
@@ -161,15 +172,17 @@ void SX126x::finish_transmit_(SX126xError result) {
 }
 
 bool SX126x::cancel_transmit_async(SX126xTransmitListener *listener) {
-  if (!this->operation_.is_waiting_for_transmit() || listener == nullptr || listener != this->tx_.listener)
+  if (!this->operation_.is_waiting_for_transmit() || listener == nullptr || listener != this->tx_.listener) {
     return false;
+  }
   this->finish_transmit_(SX126xError::SX126X_ERROR_CANCELLED);
   return true;
 }
 
 void SX126x::poll_transmit_(uint32_t now) {
-  if (!this->operation_.is_waiting_for_transmit())
+  if (!this->operation_.is_waiting_for_transmit()) {
     return;
+  }
   if (this->dio1_pin_->digital_read()) {
     uint16_t status;
     if (!this->command_result_(this->commands_.read_irq(status)) ||
@@ -183,8 +196,9 @@ void SX126x::poll_transmit_(uint32_t now) {
     }
   }
   // A cached loop tick can precede admission; signed subtraction also handles wraparound.
-  if (static_cast<int32_t>(now - this->tx_.started_ms) >= static_cast<int32_t>(this->tx_.timeout_ms))
+  if (static_cast<int32_t>(now - this->tx_.started_ms) >= static_cast<int32_t>(this->tx_.timeout_ms)) {
     this->finish_transmit_(SX126xError::TIMEOUT);
+  }
 }
 
 void SX126x::call_listeners_(const std::vector<uint8_t> &packet, float rssi, float snr) {
@@ -196,14 +210,16 @@ void SX126x::call_listeners_(const std::vector<uint8_t> &packet, float rssi, flo
 }
 
 void SX126x::loop() {
-  if (this->rx_dispatching_ || this->is_failed())
+  if (this->rx_dispatching_ || this->is_failed()) {
     return;
+  }
   if (this->operation_.is_waiting_for_transmit()) {
     this->poll_transmit_(App.get_loop_component_start_time());
     return;
   }
-  if (!this->operation_.is_ready())
+  if (!this->operation_.is_ready()) {
     return;
+  }
   if (!this->dio1_pin_->digital_read()) {
     if (this->dio1_pin_->is_internal()) {
       this->disable_loop();
@@ -213,12 +229,14 @@ void SX126x::loop() {
 
   uint16_t status;
   if (!this->command_result_(this->commands_.read_irq(status)) ||
-      !this->command_result_(this->commands_.clear_irqs(status)))
+      !this->command_result_(this->commands_.clear_irqs(status))) {
     return;
+  }
   if ((status & IRQ_RX_DONE) && !(status & IRQ_CRC_ERROR)) {
     float rssi, snr;
-    if (this->command_result_(this->commands_.read_packet(this->active_profile_, this->packet_, rssi, snr)))
+    if (this->command_result_(this->commands_.read_packet(this->active_profile_, this->packet_, rssi, snr))) {
       this->call_listeners_(this->packet_, rssi, snr);
+    }
   }
 }
 

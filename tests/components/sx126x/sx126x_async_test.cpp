@@ -8,8 +8,9 @@ class TransmitListener : public SX126xTransmitListener {
  public:
   void on_transmit_complete(SX126xError result) override {
     this->results.push_back(result);
-    if (this->on_complete)
+    if (this->on_complete) {
       this->on_complete(result);
+    }
   }
   std::vector<SX126xError> results;
   std::function<void(SX126xError)> on_complete;
@@ -422,8 +423,9 @@ TEST(SX126xAsync, BlockingSendUsesIrqResultInsteadOfTreatingAnyDioAsSuccess) {
   auto write = hw.cs.on_write;
   hw.cs.on_write = [&](bool high) {
     write(high);
-    if (high && !hw.transactions.back().empty() && hw.transactions.back()[0] == RADIO_SET_TX)
+    if (high && !hw.transactions.back().empty() && hw.transactions.back()[0] == RADIO_SET_TX) {
       hw.irq = IRQ_RX_TX_TIMEOUT;
+    }
   };
   EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::TIMEOUT);
   EXPECT_TRUE(hw.receiving);

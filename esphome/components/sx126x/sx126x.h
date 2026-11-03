@@ -144,8 +144,9 @@ class SX126x final : public Component {
   RadioOperation operation_;
   bool prepare_transmit_(const uint8_t *data, size_t len, uint32_t timeout_ms);
   template<typename Command> void change_mode_(Command &&command, bool retains_configuration = true) {
-    if (this->can_change_mode_() && this->operation_.change_mode(command, retains_configuration))
+    if (this->can_change_mode_() && this->operation_.change_mode(command, retains_configuration)) {
       this->enable_loop();
+    }
   }
   TxOperation tx_;
   bool rx_dispatching_{false};

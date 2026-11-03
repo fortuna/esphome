@@ -16,8 +16,9 @@ class TestPin : public GPIOPin {
   }
   void digital_write(bool level) override {
     this->level = level;
-    if (this->on_write)
+    if (this->on_write) {
       this->on_write(level);
+    }
   }
   bool is_internal() override { return this->internal; }
 
@@ -46,8 +47,9 @@ class RadioHardware {
         this->selected_ = false;
         this->ends++;
         const auto &command = this->transactions.back();
-        if (command.empty())
+        if (command.empty()) {
           return;
+        }
         switch (command[0]) {
           case RADIO_SET_PACKETPARAMS:
             this->packet_params = command;
@@ -57,8 +59,9 @@ class RadioHardware {
             break;
           case RADIO_SET_TX:
             this->sends++;
-            if (this->auto_complete)
+            if (this->auto_complete) {
               this->irq |= IRQ_TX_DONE;
+            }
             break;
           case RADIO_SET_RX:
             this->receiving = true;
@@ -147,8 +150,9 @@ class RadioHardware {
 
  protected:
   uint8_t reply_byte_(const std::vector<uint8_t> &command) {
-    if (command.empty())
+    if (command.empty()) {
       return 0;
+    }
     const size_t pos = command.size();
     switch (command[0]) {
       case RADIO_READ_REGISTER:
@@ -158,24 +162,31 @@ class RadioHardware {
         }
         break;
       case RADIO_GET_IRQSTATUS:
-        if (pos == 2)
+        if (pos == 2) {
           return this->irq >> 8;
-        if (pos == 3)
+        }
+        if (pos == 3) {
           return this->irq & 0xFF;
+        }
         break;
       case RADIO_GET_PACKETSTATUS:
-        if (pos == 2)
+        if (pos == 2) {
           return 80;
-        if (pos == 3)
+        }
+        if (pos == 3) {
           return 40;
-        if (pos == 4)
+        }
+        if (pos == 4) {
           return 84;
+        }
         break;
       case RADIO_GET_RXBUFFERSTATUS:
-        if (pos == 2)
+        if (pos == 2) {
           return this->packet.size();
-        if (pos == 3)
+        }
+        if (pos == 3) {
           return 7;
+        }
         break;
       case RADIO_READ_BUFFER:
         if (pos >= 3) {
