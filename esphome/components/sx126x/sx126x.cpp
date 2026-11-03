@@ -84,13 +84,16 @@ void SX126x::setup() {
 void SX126x::configure() { this->configure_(); }
 
 bool SX126x::configure_() {
-  if (this->is_failed()) {
+  if (this->is_failed())
     return false;
-  }
-  uint8_t buf[8];
+  const bool configured = this->operation_.configure([this]() { return this->apply_configuration_(); });
+  if (configured)
+    this->enable_loop();
+  return configured;
+}
 
-  // Reset discards the previous profile; only a complete configuration restores readiness.
-  this->configured_ = false;
+bool SX126x::apply_configuration_() {
+  uint8_t buf[8];
   // toggle chip reset
   this->rst_pin_->digital_write(true);
   delayMicroseconds(RESET_DELAY_HIGH_US);
@@ -294,8 +297,6 @@ bool SX126x::configure_() {
       return false;
     }
   }
-  this->configured_ = true;
-  this->enable_loop();
   return true;
 }
 
@@ -342,44 +343,47 @@ bool SX126x::set_packet_params_(uint8_t payload_length) {
 
 SX126xError SX126x::transmit_packet(const uint8_t *data, size_t len) {
   // Callers such as a template number's on_value can run before setup() or after a failed setup
-  if (!this->is_ready() || !this->configured_) {
+  if (!this->is_ready()) {
     ESP_LOGW(TAG, "Radio not ready, packet dropped");
     return SX126xError::SX126X_ERROR_NOT_READY;
   }
+  const auto admission = this->operation_.transmit_admission();
+  if (admission != SX126xError::NONE)
+    return admission;
   if (this->payload_length_ > 0 && this->payload_length_ != len) {
     ESP_LOGE(TAG, "Packet size does not match config");
     return SX126xError::INVALID_PARAMS;
   }
-  if (len == 0 || len > this->get_max_packet_size()) {
+  if (data == nullptr || len == 0 || len > this->get_max_packet_size()) {
     ESP_LOGE(TAG, "Packet size out of range");
     return SX126xError::INVALID_PARAMS;
   }
 
-  // Preparation changes RX state and packet length. Readiness returns only after full restoration.
-  this->configured_ = false;
-  SX126xError ret = SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
+  const auto result = this->operation_.transmit([this, data, len]() { return this->prepare_transmit_(data, len); },
+                                                [this]() { return this->wait_for_transmit_(); },
+                                                [this]() { return this->restore_after_transmit_(); });
+  if (this->operation_.is_ready())
+    this->enable_loop();
+  return result;
+}
+
+bool SX126x::prepare_transmit_(const uint8_t *data, size_t len) {
   uint8_t clear[2] = {0xFF, 0xFF};
-  if (this->set_mode_standby_(STDBY_XOSC) && (this->payload_length_ != 0 || this->set_packet_params_(len)) &&
-      this->write_fifo_(0x00, data, len) && this->write_opcode_(RADIO_CLR_IRQSTATUS, clear, 2) &&
-      this->set_mode_tx_()) {
-    ret = SX126xError::NONE;
-    // Wait until transmit completes, typically less than 100 ms.
-    const uint32_t start = millis();
-    while (!this->dio1_pin_->digital_read()) {
-      App.feed_wdt();
-      if (millis() - start > TRANSMIT_TIMEOUT_MS) {
-        ESP_LOGE(TAG, "Transmit packet failure");
-        ret = SX126xError::TIMEOUT;
-        break;
-      }
+  return this->set_mode_standby_(STDBY_XOSC) && (this->payload_length_ != 0 || this->set_packet_params_(len)) &&
+         this->write_fifo_(0x00, data, len) && this->write_opcode_(RADIO_CLR_IRQSTATUS, clear, 2) &&
+         this->set_mode_tx_();
+}
+
+SX126xError SX126x::wait_for_transmit_() {
+  const uint32_t start = millis();
+  while (!this->dio1_pin_->digital_read()) {
+    App.feed_wdt();
+    if (millis() - start > TRANSMIT_TIMEOUT_MS) {
+      ESP_LOGE(TAG, "Transmit packet failure");
+      return SX126xError::TIMEOUT;
     }
   }
-
-  if (!this->restore_after_transmit_())
-    return SX126xError::SX126X_ERROR_BUSY_TIMEOUT;
-  this->configured_ = true;
-  this->enable_loop();
-  return ret;
+  return SX126xError::NONE;
 }
 
 bool SX126x::restore_after_transmit_() {
@@ -397,7 +401,7 @@ void SX126x::call_listeners_(const std::vector<uint8_t> &packet, float rssi, flo
 }
 
 void SX126x::loop() {
-  if (this->is_failed() || !this->configured_) {
+  if (this->is_failed() || !this->operation_.is_ready()) {
     return;
   }
   if (!this->dio1_pin_->digital_read()) {

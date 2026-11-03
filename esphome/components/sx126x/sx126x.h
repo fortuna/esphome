@@ -1,6 +1,7 @@
 #pragma once
 
 #include "spi_command_port.h"
+#include "radio_operation.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 #include "esphome/core/hal.h"
@@ -48,8 +49,6 @@ enum SX126xBw : uint8_t {
   SX126X_BW_500000,
 };
 
-enum class SX126xError { NONE = 0, TIMEOUT, INVALID_PARAMS, SX126X_ERROR_NOT_READY, SX126X_ERROR_BUSY_TIMEOUT };
-
 class SX126xListener {
  public:
   virtual void on_packet(const std::vector<uint8_t> &packet, float rssi, float snr) = 0;
@@ -95,20 +94,16 @@ class SX126x final : public Component {
   void set_frequency(uint32_t frequency) { this->frequency_ = frequency; }
   void set_sx1261(bool sx1261) { this->sx1261_ = sx1261; }
   void set_mode_rx() {
-    if (this->configured_)
-      this->set_mode_rx_();
+    this->change_mode_([this]() { return this->set_mode_rx_(); });
   }
   void set_mode_tx() {
-    if (this->configured_)
-      this->set_mode_tx_();
+    this->change_mode_([this]() { return this->set_mode_tx_(); });
   }
   void set_mode_standby(SX126xStandbyMode mode) {
-    if (this->configured_)
-      this->set_mode_standby_(mode);
+    this->change_mode_([this, mode]() { return this->set_mode_standby_(mode); });
   }
   void set_mode_sleep(bool cold = false) {
-    if (this->configured_)
-      this->set_mode_sleep_(cold);
+    this->change_mode_([this, cold]() { return this->set_mode_sleep_(cold); }, !cold);
   }
   void set_modulation(uint8_t modulation) { this->modulation_ = modulation; }
   void set_pa_power(int8_t power) { this->pa_power_ = power; }
@@ -125,8 +120,7 @@ class SX126x final : public Component {
   void set_tcxo_voltage(uint8_t tcxo_voltage) { this->tcxo_voltage_ = tcxo_voltage; }
   void set_tcxo_delay(uint32_t tcxo_delay) { this->tcxo_delay_ = tcxo_delay; }
   void run_image_cal() {
-    if (this->configured_)
-      this->run_image_cal_();
+    this->change_mode_([this]() { return this->run_image_cal_(); });
   }
   void configure();
   SX126xError transmit_packet(const uint8_t *data, size_t len);
@@ -136,10 +130,8 @@ class SX126x final : public Component {
   void register_listener(SX126xListener *listener) { this->listeners_.push_back(listener); }
   Trigger<std::vector<uint8_t>, float, float> *get_packet_trigger() { return &this->packet_trigger_; }
 
- protected:
+ private:
   static void gpio_intr(SX126x *arg);
-  void configure_fsk_ook_();
-  void configure_lora_();
   bool set_packet_params_(uint8_t payload_length);
   bool read_fifo_(uint8_t offset, std::vector<uint8_t> &packet);
   bool write_fifo_(uint8_t offset, const uint8_t *data, size_t len);
@@ -149,11 +141,18 @@ class SX126x final : public Component {
   bool read_register_(uint16_t reg, uint8_t *data, uint8_t size);
   void call_listeners_(const std::vector<uint8_t> &packet, float rssi, float snr);
   bool restore_after_transmit_();
-  bool configured_{false};
+  RadioOperation operation_;
+  bool prepare_transmit_(const uint8_t *data, size_t len);
+  SX126xError wait_for_transmit_();
+  template<typename Command> void change_mode_(Command &&command, bool retains_configuration = true) {
+    if (this->operation_.change_mode(command, retains_configuration))
+      this->enable_loop();
+  }
   bool command_result_(bool success);
   SpiCommandPort port_;
   GPIOPin *cs_pin_{nullptr};
   bool configure_();
+  bool apply_configuration_();
   bool run_image_cal_();
   bool set_mode_rx_();
   bool set_mode_tx_();
