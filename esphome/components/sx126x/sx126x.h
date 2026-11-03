@@ -1,6 +1,6 @@
 #pragma once
 
-#include "spi_command_port.h"
+#include "sx126x_spi_device.h"
 #include "radio_operation.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
@@ -56,20 +56,20 @@ class SX126xListener {
 
 class SX126x final : public Component {
  public:
-  void set_spi_parent(spi::SPIComponent *parent) { this->port_.set_spi_parent(parent); }
+  void set_spi_parent(spi::SPIComponent *parent) { this->spi_device_.set_spi_parent(parent); }
   void set_cs_pin(GPIOPin *pin) {
     this->cs_pin_ = pin;
-    this->port_.set_cs_pin(pin);
+    this->spi_device_.set_cs_pin(pin);
   }
-  void set_data_rate(uint32_t rate) { this->port_.set_data_rate(rate); }
-  void set_mode(spi::SPIMode mode) { this->port_.set_mode(mode); }
-  void set_bit_order(spi::SPIBitOrder order) { this->port_.set_bit_order(order); }
-  void set_release_device(bool release) { this->port_.set_release_device(release); }
-  void set_write_only(bool write_only) { this->port_.set_write_only(write_only); }
+  void set_data_rate(uint32_t rate) { this->spi_device_.set_data_rate(rate); }
+  void set_mode(spi::SPIMode mode) { this->spi_device_.set_mode(mode); }
+  void set_bit_order(spi::SPIBitOrder order) { this->spi_device_.set_bit_order(order); }
+  void set_release_device(bool release) { this->spi_device_.set_release_device(release); }
+  void set_write_only(bool write_only) { this->spi_device_.set_write_only(write_only); }
 #ifdef USE_SPI_PSRAM_DMA
-  void set_psram_dma(bool enable) { this->port_.set_psram_dma(enable); }
+  void set_psram_dma(bool enable) { this->spi_device_.set_psram_dma(enable); }
 #endif
-  void spi_teardown() { this->port_.teardown(); }
+  void spi_teardown() { this->spi_device_.teardown(); }
   size_t get_max_packet_size();
   float get_setup_priority() const override { return setup_priority::PROCESSOR; }
   void setup() override;
@@ -79,7 +79,7 @@ class SX126x final : public Component {
   void set_bitrate(uint32_t bitrate) { this->bitrate_ = bitrate; }
   void set_busy_pin(GPIOPin *busy_pin) {
     this->busy_pin_ = busy_pin;
-    this->port_.set_busy_pin(busy_pin);
+    this->spi_device_.set_busy_pin(busy_pin);
   }
   void set_coding_rate(uint8_t coding_rate) { this->coding_rate_ = coding_rate; }
   void set_crc_enable(bool crc_enable) { this->crc_enable_ = crc_enable; }
@@ -150,7 +150,7 @@ class SX126x final : public Component {
     }
   }
   bool command_result_(bool success);
-  SpiCommandPort port_;
+  Sx126xSpiDevice spi_device_;
   GPIOPin *cs_pin_{nullptr};
   bool configure_();
   bool apply_configuration_();

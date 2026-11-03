@@ -5,9 +5,9 @@
 
 namespace esphome::sx126x {
 
-// Each call owns one complete chip-select interval. No raw SPI access escapes
-// this object. Call only from the main loop; spans are borrowed until return.
-class SpiCommandPort {
+// Persistent radio device. read()/write() use exchange_() for one complete selected interval.
+// No raw SPI access escapes. Call only from the main loop; spans are borrowed until return.
+class Sx126xSpiDevice {
  public:
   void set_spi_parent(spi::SPIComponent *parent) { this->device_.set_spi_parent(parent); }
   void set_cs_pin(GPIOPin *pin) { this->device_.set_cs_pin(pin); }

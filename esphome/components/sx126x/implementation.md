@@ -55,8 +55,8 @@ configured policy. A send first validates readiness and the payload. Once admitt
 
 The diagram shows a successful blocking transmission. The outer shaded region
 marks `RadioOperation` ownership; the inner regions mark Prepare, Wait and Restore.
-Each loop iteration is a separate `SpiCommandPort` exchange. Ownership is driver
-state, not a thread lock or a continuously selected SPI device.
+Each loop iteration is a separate `Sx126xSpiDevice::exchange_()` call. Ownership is
+driver state, not a thread lock or a continuously selected SPI device.
 
 ```mermaid
 sequenceDiagram
@@ -111,21 +111,22 @@ or session event.
 
 ## One command, one selected interval
 
-`SpiCommandPort` owns the SPI device privately. Its `read()` and `write()` methods
-execute complete command frames. The component cannot call raw SPI transfers,
+`Sx126xSpiDevice` is the persistent radio device wrapper. It privately owns
+ESPHome's `spi::SPIDevice`; `read()` and `write()` delegate the selected interval
+to the private `exchange_()` method. The component cannot call raw SPI transfers,
 assert chip select, or bypass the BUSY check through inheritance. ESPHome's bus
 configuration setters are forwarded explicitly; direct SPIDevice casts and raw
 SPI calls on an SX126x instance are intentionally no longer supported.
 
-Each exchange constructs a noncopyable selection guard, asserts NSS, then waits
-for BUSY to clear. Asserting NSS first wakes a sleeping chip. No opcode, payload,
+Each `exchange_()` call constructs a noncopyable selection guard, asserts NSS,
+then waits for BUSY to clear. Asserting NSS first wakes a sleeping chip. No opcode, payload,
 or dummy byte is clocked if the wait fails. Scope exit releases NSS on both
 success and timeout. Writes apply their switching delay after release. The
-20 ms BUSY limit and SPI transfers remain synchronous; the port never holds the
+20 ms BUSY limit and SPI transfers remain synchronous; the device never holds the
 shared SPI bus for packet airtime. Input/output spans are borrowed only until the
-call returns. The port performs no payload allocation and invokes no callbacks.
+call returns. The device performs no payload allocation and invokes no callbacks.
 
-Only the port's exchange implementation can access the SPI device. Command
+Only the device's `exchange_()` implementation can access the SPI device. Command
 encoders supply header and payload bytes, while the component translates failure
 into ESPHome warnings. A completed exchange means bytes were transferred; it is
 not confirmation that the chip completed a radio operation.

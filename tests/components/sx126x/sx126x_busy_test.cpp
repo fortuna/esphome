@@ -570,9 +570,9 @@ concept ManualSelectionAccessible = requires(T &device) {
   device.disable();
 };
 static_assert(!RawSpiAccessible<SX126x>);
-static_assert(!RawSpiAccessible<SpiCommandPort>);
+static_assert(!RawSpiAccessible<Sx126xSpiDevice>);
 static_assert(!ManualSelectionAccessible<SX126x>);
-static_assert(!ManualSelectionAccessible<SpiCommandPort>);
+static_assert(!ManualSelectionAccessible<Sx126xSpiDevice>);
 }  // namespace esphome::sx126x::testing
 
 namespace esphome::sx126x::testing {

@@ -33,31 +33,31 @@ static constexpr float LOW_DATA_RATE_OPTIMIZE_THRESHOLD = 16.38f;  // 16.38 ms
 
 bool SX126x::read_fifo_(uint8_t offset, std::vector<uint8_t> &packet) {
   const uint8_t header[] = {RADIO_READ_BUFFER, offset, 0};
-  return !this->is_failed() && this->command_result_(this->port_.read(header, packet));
+  return !this->is_failed() && this->command_result_(this->spi_device_.read(header, packet));
 }
 
 bool SX126x::write_fifo_(uint8_t offset, const uint8_t *data, size_t len) {
   const uint8_t header[] = {RADIO_WRITE_BUFFER, offset};
-  return !this->is_failed() && this->command_result_(this->port_.write(header, {data, len}));
+  return !this->is_failed() && this->command_result_(this->spi_device_.write(header, {data, len}));
 }
 
 bool SX126x::read_opcode_(uint8_t opcode, uint8_t *data, uint8_t size) {
   const uint8_t header[] = {opcode, 0};
-  return !this->is_failed() && this->command_result_(this->port_.read(header, {data, size}));
+  return !this->is_failed() && this->command_result_(this->spi_device_.read(header, {data, size}));
 }
 
 bool SX126x::write_opcode_(uint8_t opcode, uint8_t *data, uint8_t size) {
-  return !this->is_failed() && this->command_result_(this->port_.write({&opcode, 1}, {data, size}));
+  return !this->is_failed() && this->command_result_(this->spi_device_.write({&opcode, 1}, {data, size}));
 }
 
 bool SX126x::read_register_(uint16_t reg, uint8_t *data, uint8_t size) {
   const uint8_t header[] = {RADIO_READ_REGISTER, static_cast<uint8_t>(reg >> 8), static_cast<uint8_t>(reg), 0};
-  return !this->is_failed() && this->command_result_(this->port_.read(header, {data, size}));
+  return !this->is_failed() && this->command_result_(this->spi_device_.read(header, {data, size}));
 }
 
 bool SX126x::write_register_(uint16_t reg, uint8_t *data, uint8_t size) {
   const uint8_t header[] = {RADIO_WRITE_REGISTER, static_cast<uint8_t>(reg >> 8), static_cast<uint8_t>(reg)};
-  return !this->is_failed() && this->command_result_(this->port_.write(header, {data, size}));
+  return !this->is_failed() && this->command_result_(this->spi_device_.write(header, {data, size}));
 }
 
 void IRAM_ATTR SX126x::gpio_intr(SX126x *arg) { arg->enable_loop_soon_any_context(); }
@@ -73,7 +73,7 @@ void SX126x::setup() {
   }
 
   // start spi
-  this->port_.setup();
+  this->spi_device_.setup();
 
   // configure rf
   if (!this->configure_() && !this->is_failed()) {
