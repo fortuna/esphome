@@ -4,6 +4,126 @@ This note describes implementation boundaries for driver maintainers. User-facin
 configuration belongs in esphome.io; C++ borrowing and completion contracts belong
 beside the public declarations in sx126x.h.
 
+## The host, the radio and three different lifetimes
+
+The host microcontroller runs ESPHome. The separate SX126x chip converts packet
+bytes into radio signals and received signals back into bytes. SPI is their wired
+command/data connection. The radio stores the outgoing bytes in its own buffer
+before transmitting; the host does not stream bytes over SPI throughout airtime.
+
+| Lifetime | Responsibility |
+| --- | --- |
+| SPI exchange | One selected interval to issue a command or transfer data. |
+| Radio operation | Prepare a transmission, wait for its outcome, then restore the radio. |
+| Protocol session | A higher-level conversation spanning multiple transmitted and received packets. |
+
+Sessions, identities, delivery acknowledgments and retries belong to the protocol
+using this driver. The driver handles individual packets. A TX completion reports
+local transmission; it does not prove another node received the packet. Any
+protocol acknowledgment arrives as a separate received packet.
+
+| Signal | Role |
+| --- | --- |
+| SCK | Clock supplied by the host to move SPI bits. |
+| MOSI | SPI data from the host to the radio. |
+| MISO | SPI data from the radio to the host. |
+| CS / NSS | Active-low chip selection for one SPI exchange. |
+| BUSY | High while the chip cannot accept the next command. |
+| DIO1 | Event indication, including transmission completion or packet reception. |
+
+BUSY becoming low means the chip can accept commands, not that transmission has
+finished. It can be low during airtime. DIO1 and the radio's event flags serve a
+different purpose: reporting events. See the Semtech datasheet's digital interface
+and operating-mode descriptions ([manufacturer documentation](https://www.semtech.com/products/wireless-rf/lora-connect/sx1262),
+checked 2026-11-02).
+
+## Life of a transmission
+
+After configuration, the radio normally listens or sleeps according to its
+applied profile. A send first validates readiness and the payload. A pending
+received packet rejects admission with BUSY so `loop()` can deliver it first.
+Once admitted, `RadioOperation` owns three sub-flows:
+
+1. **Prepare:** enter standby, clear stale event flags, set packet parameters,
+   copy the payload into the chip buffer and start TX. These are several separate
+   SPI exchanges, ending with the command that starts transmission.
+2. **Wait:** the chip sends the packet over the air. The radio remains reserved,
+   but SPI is free between exchanges. `loop()` checks event flags and the software
+   deadline; TX-done, timeout or cancellation ends the wait. The chip can transmit
+   or receive, but not both at once.
+3. **Restore:** enter standby, clear event flags, restore packet parameters and
+   resume configured reception or warm sleep. Only then can the operation finish
+   and the result be reported.
+
+The diagram shows a successful asynchronous transmission. The outer shaded region
+marks `RadioOperation` ownership; the inner regions mark Prepare, Wait and Restore.
+Each loop iteration is a separate `SpiCommandPort` exchange. Ownership is driver
+state, not a thread lock or a continuously selected SPI device.
+
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant D as SX126x driver
+    participant R as Radio chip
+
+    C->>D: start_transmit_async()
+    D->>D: Validate readiness, payload and pending RX
+    rect rgba(128, 128, 128, 0.08)
+        Note over D,R: RadioOperation boundary begins
+        rect rgba(128, 128, 128, 0.12)
+            Note over D,R: PREPARE
+            loop Each preparation command, ending with SetTx
+                D->>R: NSS low: select / wake
+                D->>D: Check BUSY, wait for low (20 ms limit)
+                D->>R: SPI opcode and parameters / packet bytes
+                D->>R: NSS high: deselect
+            end
+            D-->>C: Accepted (payload copied, TX started)
+        end
+        rect rgba(128, 128, 128, 0.12)
+            Note over D,R: WAIT: radio reserved, SPI free between exchanges
+            Note over C: ESPHome runs other work
+            R->>R: Transmit packet over the air
+            D->>D: loop() checks event or deadline
+            R-->>D: DIO1 event indication
+            loop Read and clear event flags (separate exchanges)
+                D->>R: NSS low: select
+                D->>D: Check BUSY, wait for low (20 ms limit)
+                D->>R: SPI: read / clear event flags
+                D->>R: NSS high: deselect
+            end
+        end
+        rect rgba(128, 128, 128, 0.12)
+            Note over D,R: RESTORE
+            loop Each restoration command
+                D->>R: NSS low: select / wake
+                D->>D: Check BUSY, wait for low (20 ms limit)
+                D->>R: SPI: standby, clear flags, settings, RX / sleep
+                D->>R: NSS high: deselect
+            end
+        end
+        Note over D,R: RadioOperation boundary ends: restored and ready
+    end
+    D-->>C: Completion callback with transmission result
+```
+
+The early return means the send was accepted, not completed. The caller's payload
+buffer is no longer needed, but its completion listener must remain alive.
+The blocking API starts the same operation and polls until completion instead of
+returning early. It therefore holds up other main-loop work during airtime.
+
+The scopes also define failure handling. If BUSY does not clear, the exchange
+releases NSS without clocking an opcode or data. A failed Prepare skips Wait and
+enters Restore; a Wait timeout or cancellation also enters Restore. Restoration failure leaves
+the operation in `RecoveryRequired` instead of ready, and successful configuration
+is required before reuse. The restoration result takes precedence over TX success.
+Releasing SPI alone cannot establish that packet settings and reception recovered.
+
+Reception uses the same short exchanges: a DIO1 event prompts `loop()` to read
+event flags, packet metadata and the received bytes, then deliver the packet to
+listeners. Higher-level software interprets those bytes as a message, acknowledgment
+or session event.
+
 ## One command, one selected interval
 
 `SpiCommandPort` owns the SPI device privately. Its `read()` and `write()` methods
