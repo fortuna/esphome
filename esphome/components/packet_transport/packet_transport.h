@@ -120,6 +120,9 @@ class PacketTransport : public PollingComponent {
   // child classes must implement this
   virtual void send_packet(const std::vector<uint8_t> &buf) const = 0;
   // Backpressure-aware transports return false to retain pending sensor/ping work.
+  // should_send() is only a hint, so the result here decides. A sensor update split over
+  // several packets is kept until all of them are sent; a retry may resend earlier packets
+  // with current values. The ping key changes only after its request is sent.
   // Existing transports keep their send_packet() implementation unchanged.
   virtual bool try_send_packet(const std::vector<uint8_t> &buf) const {
     this->send_packet(buf);

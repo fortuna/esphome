@@ -1,7 +1,7 @@
 #pragma once
 
-#include "sx126x_commands.h"
-#include "radio_operation.h"
+#include "sx126x_radio.h"
+#include "esphome/components/spi/spi.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 #include "esphome/core/hal.h"
@@ -13,32 +13,27 @@ namespace esphome::sx126x {
 
 static constexpr size_t SX126X_MAX_PACKET_SIZE = 255;
 
-class SX126xTransmitListener {
- public:
-  virtual void on_transmit_complete(SX126xError result) = 0;
-};
-
 class SX126xListener {
  public:
+  // Called from loop(). The packet is borrowed until this returns; copy what you keep.
+  // Listeners may send, change mode or configure. A send returns BUSY if another packet
+  // is already waiting, which is then delivered by the next loop().
   virtual void on_packet(const std::vector<uint8_t> &packet, float rssi, float snr) = 0;
 };
 
 class SX126x final : public Component {
  public:
-  void set_spi_parent(spi::SPIComponent *parent) { this->spi_device_.set_spi_parent(parent); }
-  void set_cs_pin(GPIOPin *pin) {
-    this->cs_pin_ = pin;
-    this->spi_device_.set_cs_pin(pin);
-  }
-  void set_data_rate(uint32_t rate) { this->spi_device_.set_data_rate(rate); }
-  void set_mode(spi::SPIMode mode) { this->spi_device_.set_mode(mode); }
-  void set_bit_order(spi::SPIBitOrder order) { this->spi_device_.set_bit_order(order); }
-  void set_release_device(bool release) { this->spi_device_.set_release_device(release); }
-  void set_write_only(bool write_only) { this->spi_device_.set_write_only(write_only); }
+  void set_spi_parent(spi::SPIComponent *parent) { this->radio_.bus().set_spi_parent(parent); }
+  void set_cs_pin(GPIOPin *pin) { this->radio_.bus().set_cs_pin(pin); }
+  void set_data_rate(uint32_t rate) { this->radio_.bus().set_data_rate(rate); }
+  void set_mode(spi::SPIMode mode) { this->radio_.bus().set_mode(mode); }
+  void set_bit_order(spi::SPIBitOrder order) { this->radio_.bus().set_bit_order(order); }
+  void set_release_device(bool release) { this->radio_.bus().set_release_device(release); }
+  void set_write_only(bool write_only) { this->radio_.bus().set_write_only(write_only); }
 #ifdef USE_SPI_PSRAM_DMA
-  void set_psram_dma(bool enable) { this->spi_device_.set_psram_dma(enable); }
+  void set_psram_dma(bool enable) { this->radio_.bus().set_psram_dma(enable); }
 #endif
-  void spi_teardown() { this->spi_device_.teardown(); }
+  void spi_teardown() { this->radio_.bus().teardown(); }
   size_t get_max_packet_size();
   float get_setup_priority() const override { return setup_priority::PROCESSOR; }
   void setup() override;
@@ -46,10 +41,7 @@ class SX126x final : public Component {
   void dump_config() override;
   void set_bandwidth(SX126xBw bandwidth) { this->requested_profile_.bandwidth = bandwidth; }
   void set_bitrate(uint32_t bitrate) { this->requested_profile_.bitrate = bitrate; }
-  void set_busy_pin(GPIOPin *busy_pin) {
-    this->busy_pin_ = busy_pin;
-    this->spi_device_.set_busy_pin(busy_pin);
-  }
+  void set_busy_pin(GPIOPin *busy_pin) { this->radio_.bus().set_busy_pin(busy_pin); }
   void set_coding_rate(uint8_t coding_rate) { this->requested_profile_.coding_rate = coding_rate; }
   void set_crc_enable(bool crc_enable) { this->requested_profile_.crc_enable = crc_enable; }
   void set_crc_inverted(bool crc_inverted) { this->requested_profile_.crc_inverted = crc_inverted; }
@@ -61,28 +53,21 @@ class SX126x final : public Component {
     this->requested_profile_.whitening_initial = whitening_initial;
   }
   void set_deviation(uint32_t deviation) { this->requested_profile_.deviation = deviation; }
-  void set_dio1_pin(GPIOPin *dio1_pin) { this->dio1_pin_ = dio1_pin; }
+  void set_dio1_pin(GPIOPin *dio1_pin) { this->radio_.set_dio1_pin(dio1_pin); }
   void set_frequency(uint32_t frequency) { this->requested_profile_.frequency = frequency; }
   void set_sx1261(bool sx1261) { this->requested_profile_.sx1261 = sx1261; }
-  void set_mode_rx() {
-    this->change_mode_([this]() { return this->command_result_(this->commands_.receive()); });
-  }
-  void set_mode_tx() {
-    this->change_mode_([this]() { return this->command_result_(this->commands_.transmit()); });
-  }
-  void set_mode_standby(SX126xStandbyMode mode) {
-    this->change_mode_([this, mode]() { return this->command_result_(this->commands_.standby(mode)); });
-  }
-  void set_mode_sleep(bool cold = false) {
-    this->change_mode_([this, cold]() { return this->command_result_(this->commands_.sleep(cold)); }, !cold);
-  }
+  // Mode changes are ignored with a warning unless the radio is idle and configured.
+  void set_mode_rx();
+  void set_mode_tx();
+  void set_mode_standby(SX126xStandbyMode mode);
+  void set_mode_sleep(bool cold = false);
   void set_modulation(uint8_t modulation) { this->requested_profile_.modulation = modulation; }
   void set_pa_power(int8_t power) { this->requested_profile_.pa_power = power; }
   void set_pa_ramp(uint8_t ramp) { this->requested_profile_.pa_ramp = ramp; }
   void set_payload_length(uint8_t payload_length) { this->requested_profile_.payload_length = payload_length; }
   void set_preamble_detect(uint16_t preamble_detect) { this->requested_profile_.preamble_detect = preamble_detect; }
   void set_preamble_size(uint16_t preamble_size) { this->requested_profile_.preamble_size = preamble_size; }
-  void set_rst_pin(GPIOPin *rst_pin) { this->rst_pin_ = rst_pin; }
+  void set_rst_pin(GPIOPin *rst_pin) { this->radio_.set_rst_pin(rst_pin); }
   void set_rx_start(bool rx_start) { this->requested_profile_.rx_start = rx_start; }
   void set_rf_switch(bool rf_switch) { this->requested_profile_.rf_switch = rf_switch; }
   void set_shaping(uint8_t shaping) { this->requested_profile_.shaping = shaping; }
@@ -90,10 +75,9 @@ class SX126x final : public Component {
   void set_sync_value(const std::vector<uint8_t> &sync_value) { this->requested_profile_.set_sync_value(sync_value); }
   void set_tcxo_voltage(uint8_t tcxo_voltage) { this->requested_profile_.tcxo_voltage = tcxo_voltage; }
   void set_tcxo_delay(uint32_t tcxo_delay) { this->requested_profile_.tcxo_delay = tcxo_delay; }
-  void run_image_cal() {
-    this->change_mode_(
-        [this]() { return this->command_result_(this->commands_.calibrate_image(this->active_profile_.frequency)); });
-  }
+  void run_image_cal();
+  // Mode changes and configuration are allowed during RX callbacks when the radio
+  // is available; they never modify the borrowed packet buffer.
   void configure();
   SX126xError transmit_packet(const uint8_t *data, size_t len);
   SX126xError transmit_packet(const std::vector<uint8_t> &packet) {
@@ -101,7 +85,7 @@ class SX126x final : public Component {
   }
   // Main-loop context only. NONE accepts one operation and promises one completion.
   // Data is copied into the chip FIFO before return; listener must outlive completion.
-  // Pending RX rejects admission with BUSY, without dispatching callbacks or consuming RX.
+  // Pending RX rejects admission with BUSY and is delivered by a later loop().
   // Timeout: 1..262143 ms. SPI/BUSY waits are synchronous; airtime is asynchronous.
   [[nodiscard]] SX126xError start_transmit_async(SX126xTransmitListener *listener, const uint8_t *data, size_t len,
                                                  uint32_t timeout_ms = 4000);
@@ -110,63 +94,32 @@ class SX126x final : public Component {
     return this->start_transmit_async(listener, packet.data(), packet.size(), timeout_ms);
   }
   // Normal completion runs in loop(); cancellation completes synchronously in its caller.
-  // Ownership is released before callbacks, which may start another operation if recovery
+  // The radio is released before callbacks, which may start another operation if recovery
   // succeeded. True accepts cancellation; the completion result reports cleanup failure.
   bool cancel_transmit_async(SX126xTransmitListener *listener);
-  bool is_transmitting() const;
+  bool is_transmitting() const { return this->radio_.is_transmitting(); }
   // A cheap scheduling hint; callers must still handle rejection after this check.
-  bool can_transmit() { return this->is_ready() && this->operation_.is_ready() && !this->dio1_pin_->digital_read(); }
+  bool can_transmit() {
+    return this->is_ready() && this->radio_.state() == RadioState::RADIO_STATE_IDLE && !this->radio_.busy() &&
+           !this->radio_.get_dio1_pin()->digital_read();
+  }
   void register_listener(SX126xListener *listener) { this->listeners_.push_back(listener); }
   Trigger<std::vector<uint8_t>, float, float> *get_packet_trigger() { return &this->packet_trigger_; }
 
  private:
   static void IRAM_ATTR gpio_intr(SX126x *arg) { arg->enable_loop_soon_any_context(); }
-  void call_listeners_(const std::vector<uint8_t> &packet, float rssi, float snr);
-  // Completion data only; RadioOperation owns admission and readiness.
-  struct TxOperation {
-    SX126xTransmitListener *listener{nullptr};
-    uint32_t started_ms{0};
-    uint32_t timeout_ms{0};
-  };
-  // This borrow scope prevents all recursive packet-buffer mutation during delivery.
-  class RxDelivery {
-   public:
-    explicit RxDelivery(bool &active) : active_(active) { this->active_ = true; }
-    ~RxDelivery() { this->active_ = false; }
-    RxDelivery(const RxDelivery &) = delete;
-    RxDelivery &operator=(const RxDelivery &) = delete;
-
-   private:
-    bool &active_;
-  };
-  bool can_change_mode_();
-  bool restore_after_transmit_();
-  void poll_transmit_(uint32_t now);
-  void finish_transmit_(SX126xError result);
-  RadioOperation operation_;
-  SX126xError prepare_transmit_(const uint8_t *data, size_t len, uint32_t timeout_ms);
-  template<typename Command> void change_mode_(Command &&command, bool retains_configuration = true) {
-    if (this->can_change_mode_() && this->operation_.change_mode(command, retains_configuration)) {
-      this->enable_loop();
-    }
-  }
-  TxOperation tx_;
-  bool rx_dispatching_{false};
-  bool command_result_(bool success);
-  Sx126xSpiDevice spi_device_;
-  Sx126xCommands commands_{this->spi_device_};
+  void change_mode_(ModeCommand command, uint8_t arg = 0);
+  // The only place that runs user code for a radio operation: loop scheduling, then status,
+  // then the completion or packet listeners. Sx126xRadio has already committed its state.
+  void apply_(const RadioEffects &effects);
+  SX126xError start_transmit_(SX126xTransmitListener *listener, const uint8_t *data, size_t len, uint32_t timeout_ms);
+  Sx126xRadio radio_;
   RadioProfile requested_profile_;
-  RadioProfile active_profile_;
   char version_[16]{};
-  GPIOPin *cs_pin_{nullptr};
-  bool configure_();
-  bool apply_configuration_();
   Trigger<std::vector<uint8_t>, float, float> packet_trigger_;
   std::vector<SX126xListener *> listeners_;
   std::vector<uint8_t> packet_;
-  GPIOPin *busy_pin_{nullptr};
-  GPIOPin *dio1_pin_{nullptr};
-  GPIOPin *rst_pin_{nullptr};
+  bool rx_dispatching_{false};
 };
 
 }  // namespace esphome::sx126x

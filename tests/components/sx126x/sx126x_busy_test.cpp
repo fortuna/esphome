@@ -1,5 +1,7 @@
 #include "sx126x_test_helpers.h"
+#include "esphome/core/application.h"
 #include <tuple>
+#include <type_traits>
 #ifdef USE_HOST
 #include <string>
 #include "esphome/components/logger/logger.h"
@@ -225,6 +227,7 @@ TEST_P(SX126xBusyReceive, DropsFailedReadsAndRecoversOnNextPacket) {
     EXPECT_FALSE(hardware.radio.is_failed());
     hardware.clear_trace();
     hardware.irq = IRQ_RX_DONE;
+    LoopBlockingGuard retry{nullptr, nullptr, App.get_loop_component_start_time() + 200};
     hardware.radio.loop();
     ASSERT_EQ(listener.packets.size(), 1u);
     EXPECT_EQ(listener.packets[0], hardware.packet);
@@ -248,6 +251,7 @@ TEST(SX126xBusy, KeepsPollingAnUnclearedInterruptAfterBusyTimeout) {
   hardware.radio.call();
   EXPECT_TRUE(listener.packets.empty());
   hardware.clear_trace();
+  LoopBlockingGuard retry{nullptr, nullptr, App.get_loop_component_start_time() + 200};
   hardware.radio.call();
   EXPECT_EQ(listener.packets.size(), 1u);
 }
@@ -377,6 +381,9 @@ static_assert(!RawSpiAccessible<SX126x>);
 static_assert(!RawSpiAccessible<Sx126xSpiDevice>);
 static_assert(!ManualSelectionAccessible<SX126x>);
 static_assert(!ManualSelectionAccessible<Sx126xSpiDevice>);
+// The radio runs every command sequence and state change. Without component status or
+// listeners it cannot run user code mid-operation; SX126x::apply_() does that afterwards.
+static_assert(!std::is_base_of_v<Component, Sx126xRadio>);
 }  // namespace esphome::sx126x::testing
 
 namespace esphome::sx126x::testing {
@@ -537,25 +544,26 @@ TEST(SX126xDiagnostics, BlockingRejectionsExplainWhyNoPacketWasSent) {
   RadioHardware hw;
   auto output = capture_radio_logs(
       [&]() { EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::SX126X_ERROR_NOT_READY); });
-  EXPECT_NE(output.find("Packet rejected: radio not ready"), std::string::npos);
+  EXPECT_NE(output.find("Packet send failed: radio not ready"), std::string::npos);
   hw.configure(true, true, true);
   hw.clear_trace();
   output = capture_radio_logs(
       [&]() { EXPECT_EQ(hw.radio.transmit_packet(hw.packet.data(), 2), SX126xError::INVALID_PARAMS); });
-  EXPECT_NE(output.find("Packet rejected: invalid payload"), std::string::npos);
+  EXPECT_NE(output.find("Packet send failed: invalid payload"), std::string::npos);
   EXPECT_TRUE(hw.transactions.empty());
   hw.irq = IRQ_RX_DONE;
   output =
       capture_radio_logs([&]() { EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::SX126X_ERROR_BUSY); });
-  EXPECT_NE(output.find("Packet rejected: radio busy"), std::string::npos);
+  EXPECT_NE(output.find("Packet send failed: radio busy"), std::string::npos);
   EXPECT_EQ(hw.irq, IRQ_RX_DONE);
   EXPECT_EQ(hw.sends, 0u);
-  hw.irq = 0;
+  hw.radio.loop();  // Deliver the held packet, which also clears its IRQ.
+  EXPECT_EQ(hw.irq, 0u);
   hw.clear_trace();
   hw.fail_at = 1;
   output = capture_radio_logs(
       [&]() { EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::SX126X_ERROR_BUSY_TIMEOUT); });
-  EXPECT_NE(output.find("Packet preparation failed"), std::string::npos);
+  EXPECT_NE(output.find("Packet send failed: bus timeout"), std::string::npos);
   EXPECT_EQ(hw.sends, 0u);
 }
 
@@ -572,7 +580,7 @@ TEST(SX126xDiagnostics, AsyncAdmissionLeavesRejectionReportingToItsCaller) {
     hw.irq = IRQ_RX_DONE;
     EXPECT_EQ(hw.radio.start_transmit_async(&completion, hw.packet), SX126xError::SX126X_ERROR_BUSY);
   });
-  EXPECT_EQ(output.find("Packet rejected"), std::string::npos);
+  EXPECT_EQ(output.find("Packet send failed"), std::string::npos);
   EXPECT_EQ(hw.sends, 0u);
 }
 
@@ -610,5 +618,48 @@ TEST(SX126xDiagnostics, StagedConfigurationIsLabelledAndDoesNotAlterAppliedSetti
   EXPECT_NE(output.find("Frequency: 868000000 Hz"), std::string::npos);
   EXPECT_EQ(hw.radio.get_max_packet_size(), 3u);
 }
+class SX126xTimeoutDiagnostics : public ::testing::TestWithParam<bool> {};
+
+TEST_P(SX126xTimeoutDiagnostics, BlockingTimeoutLogsFailureAfterRestoration) {
+  RadioHardware hw;
+  hw.configure(true, true);
+  hw.auto_complete = false;
+  if (GetParam()) {
+    hw.dio.on_read = [&]() {
+      if (hw.sends > 0) {
+        hw.irq = IRQ_RX_TX_TIMEOUT;
+      }
+      return hw.irq != 0;
+    };
+  }
+  const auto output =
+      capture_radio_logs([&]() { EXPECT_EQ(hw.radio.transmit_packet(hw.packet), SX126xError::TIMEOUT); });
+  EXPECT_NE(output.find("Packet send failed: timeout"), std::string::npos);
+  EXPECT_TRUE(hw.receiving);
+  EXPECT_FALSE(hw.radio.is_transmitting());
+  EXPECT_FALSE(hw.radio.status_has_warning());  // Restoration itself succeeded.
+}
+
+INSTANTIATE_TEST_SUITE_P(SoftwareDeadlineAndRadioTimeout, SX126xTimeoutDiagnostics, ::testing::Bool());
+
+TEST(SX126xDiagnostics, AsyncTimeoutLeavesCompletionReportingToItsCaller) {
+  struct Completion final : SX126xTransmitListener {
+    void on_transmit_complete(SX126xError result) override {
+      this->count++;
+      EXPECT_EQ(result, SX126xError::TIMEOUT);
+    }
+    unsigned count{0};
+  } completion;
+  RadioHardware hw;
+  hw.configure(true, true);
+  const auto output = capture_radio_logs([&]() {
+    ASSERT_EQ(hw.radio.start_transmit_async(&completion, hw.packet), SX126xError::NONE);
+    hw.irq = IRQ_RX_TX_TIMEOUT;
+    hw.radio.loop();
+  });
+  EXPECT_EQ(completion.count, 1u);
+  EXPECT_EQ(output.find("Packet send failed"), std::string::npos);
+}
+
 }  // namespace esphome::sx126x::testing
 #endif
